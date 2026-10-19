@@ -1,0 +1,8 @@
+(Cuadrado de 100 mm; cuatro esquinas de 90 grados)
+G21 G90
+G0 X0 Y0 Z0
+G1 X100 Y0 F600
+G1 X100 Y100
+G1 X0 Y100
+G1 X0 Y0
+M2
