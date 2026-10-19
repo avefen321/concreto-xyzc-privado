@@ -1,0 +1,58 @@
+.hidden{display:none!important}
+.example-button{display:block;margin:14px auto 0;background:transparent;border:1px solid #48545a;color:#cbd5d9;padding:9px 14px;font-size:11px;cursor:pointer}
+.example-button:hover{border-color:#ef8c4c;color:#efb88f}
+.camera-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.camera-controls button{background:#263034;color:#d6dde0;border:1px solid #465257;padding:8px 10px;font-size:11px}
+.camera-controls button:hover{border-color:#ef8c4c}
+.camera-controls button[aria-pressed="true"]{border-color:#ef8c4c;color:#efb88f}
+.camera-controls span{color:#859197;font-size:10px;margin-left:auto}
+.sim-options{display:flex;align-items:center;gap:22px;flex-wrap:wrap;margin:12px 0}
+.sim-options label{color:#aeb8bc;font-size:11px}
+.sim-options select{background:#111517;border:1px solid #3b4449;color:#e7ebed;border-radius:3px;margin-left:8px;padding:7px}
+.sim-options .inline-check{display:flex;align-items:center;gap:6px}
+.sim-options input{accent-color:#ef8c4c}
+.canvas-panel canvas{touch-action:none;cursor:crosshair}
+.canvas-panel.canvas-3d canvas{cursor:grab}
+.canvas-panel.canvas-3d canvas:active{cursor:grabbing}
+.fillet-details{border-top:1px solid #333e42;padding:9px 12px;color:#aeb8bc;font-size:11px}
+.fillet-details summary{color:#e1e8ea;cursor:pointer}
+.fillet-details div{line-height:1.8;padding:7px 0 2px}
+@media(max-width:640px){.camera-controls span{margin-left:0}.sim-options{gap:12px}}
+.stage-detail{white-space:pre-wrap;overflow:auto;max-height:280px;padding:16px;background:#111517;border:1px solid #3b4449;color:#b8c7ce;font:12px/1.7 Consolas,monospace}
+.sim-options input[type="number"]{width:110px;background:#111517;border:1px solid #3b4449;color:#e7ebed;padding:7px;margin-left:8px}
+.sim-options .example-button{margin:0}
+.detail-line{line-height:1.8;overflow-wrap:anywhere}
+.issue-link{background:transparent;color:inherit;border:1px solid #705533;padding:4px 9px;margin-left:12px;cursor:pointer}
+.summary-grid .stat strong{overflow-wrap:anywhere}
+.playback{flex-wrap:wrap;gap:12px}
+.playback #timeline{min-width:140px}
+.playback #play-mode{width:175px}
+.playback #timeline-label{min-width:135px;font-variant-numeric:tabular-nums}
+.playback #play-speed{width:80px}
+.playback #play-button{flex-shrink:0}
+@media(max-width:900px){.playback #timeline{order:1;flex-basis:55%}.playback #timeline-label{order:2}}
+.closure-dialog{width:min(520px,calc(100vw - 40px));max-height:calc(100vh - 40px);overflow:auto;box-sizing:border-box;padding:28px;background:#1b2023;color:#e7ebed;border:1px solid #806047;border-radius:8px;box-shadow:0 22px 80px #0009}
+.closure-dialog::backdrop{background:#080c10c9}
+.closure-dialog h2{font-size:23px;line-height:1.25;margin-bottom:14px}
+.closure-dialog p{font-size:13px;line-height:1.65;color:#b5bfc4}
+.closure-dialog .eyebrow{font-size:10px;margin-bottom:12px}
+.closure-details{display:grid;grid-template-columns:1fr 1fr;gap:12px;background:#121719;border:1px solid #364146;padding:16px;margin:18px 0}
+.closure-details small{display:block;color:#919da3;font-size:10px;margin-bottom:8px}
+.closure-details strong{font-size:19px;color:#efb88f;font-variant-numeric:tabular-nums}
+.closure-details .seam{grid-column:1/-1;color:#aeb8bc;font-size:11px;line-height:1.6}
+.closure-dialog .closure-explanation{font-size:12px}
+.closure-actions{display:flex;justify-content:flex-end;gap:12px;margin-top:24px}
+.closure-actions button{padding:12px 16px;letter-spacing:0;font-size:12px;border-radius:3px}
+.closure-actions .secondary{background:transparent;border:1px solid #59656b;color:#d0d8dd}
+.closure-actions button:focus-visible{outline:2px solid #efb88f;outline-offset:4px}
+.closure-actions .secondary:hover{background:#293236}
+.cordon-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:22px}
+.cordon-actions button{padding:12px 8px;border-radius:3px;font-size:11px;line-height:1.4}
+.cordon-actions .primary{grid-column:1/-1}
+.cordon-actions .secondary{background:transparent;border:1px solid #59656b;color:#d0d8dd}
+.cordon-actions button:disabled{opacity:.4;cursor:not-allowed}
+.cordon-actions button:focus-visible{outline:2px solid #efb88f;outline-offset:3px}
+.cordon-swatch{background:#af92ef}
+.download-status{flex-basis:100%;margin:2px 0 0;color:#c4cdd1;font-size:12px;line-height:1.5}
+.closure-summary{margin-bottom:12px}
+@media(max-width:540px){.closure-dialog{padding:22px}.closure-actions{flex-direction:column-reverse}.closure-actions button{width:100%}}
