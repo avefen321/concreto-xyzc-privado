@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Concrete CNC · XYZC Studio</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <link rel="stylesheet" href="/css/interactive.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark">C<span>◌</span></div><div><strong>CONCRETE CNC</strong><small>XYZC STUDIO / LOCAL</small></div></div>
+      <div class="side-label">WORKSPACE</div>
+      <nav id="navigation" aria-label="Secciones">
+        <button data-page="archivo" class="active"><span>01</span> Archivo</button>
+        <button data-page="conversion"><span>02</span> Conversión</button>
+        <button data-page="simulacion"><span>03</span> Simulación</button>
+        <button data-page="auditoria"><span>04</span> Auditoría</button>
+        <button data-page="configuracion"><span>05</span> Configuración</button>
+      </nav>
+      <div class="side-bottom"><div class="live-dot"></div> PROCESAMIENTO LOCAL <small>G1 / G2 / G3 XYZC · LinuxCNC</small></div>
+    </aside>
+    <main>
+      <header class="topbar"><div id="breadcrumb">PROYECTO / ARCHIVO</div><div class="top-right"><span id="header-file">SIN ARCHIVO</span><span class="divider"></span><span id="header-status" class="status-mini">LISTO</span></div></header>
+      <section class="page active" id="page-archivo">
+        <div class="eyebrow">01 / ENTRADA</div><h1>Archivo G-code</h1><p class="lead">Carga una trayectoria XYZ y revisa su estructura antes de convertirla.</p>
+        <div class="upload" id="dropzone" role="button" tabindex="0" aria-label="Cargar G-code"><div class="upload-icon">↥</div><h2>Arrastra el G-code aquí</h2><p>o selecciona un archivo .ngc, .gcode, .nc o .txt</p><button class="primary" id="select-file">CARGAR G-CODE <span>↗</span></button><input type="file" id="file-input" accept=".ngc,.gcode,.nc,.txt" hidden></div>
+        <button class="example-button" id="load-example">Cargar ejemplo de cuadrado</button>
+        <button class="example-button" id="load-organic-example">Cargar contorno orgánico · modo paramétrico</button>
+        <div class="section-head"><h2>Resumen del archivo</h2><span id="parse-tag" class="pill neutral">ESPERANDO ARCHIVO</span></div>
+        <div id="file-summary" class="empty-panel">Los datos del archivo aparecerán aquí.</div>
+      </section>
+      <section class="page" id="page-conversion">
+        <div class="eyebrow">02 / PLANIFICACIÓN</div><h1>Conversión XYZ → XYZC</h1><p class="lead">La boquilla se orienta perpendicular al recorrido. El modo de fillets redondea localmente las esquinas dentro de la tolerancia configurada.</p>
+        <div class="form-grid">
+          <div class="panel"><h2>Orientación</h2><div class="fields"><label>Alineación <span>°</span><input id="alignment" type="number" value="90" step="1"></label><label>Calibración <span>°</span><input id="calibration" type="number" value="0" step="1"></label><label>Simetría <span>°</span><select id="symmetry"><option value="360">360°</option><option value="180">180°</option></select></label></div><p class="hint">90° = eje largo de la boquilla perpendicular a la tangente XY.</p></div>
+          <div class="panel"><h2>Curvas</h2><div class="fields"><label>Estimación de tangente<input id="tangent-model-label" value="Centrada por longitud de arco" disabled></label><label>Campo angular<input id="angular-model-label" value="PCHIP sin overshoot" disabled></label></div><p class="hint">La referencia se elige en Configuración. Se mantiene dentro del mismo trazo y no cruza esquinas clasificadas.</p></div>
+          <div class="panel"><h2>Geometría de esquinas</h2><div class="fields"><label>Modo<select id="geometry-mode"><option value="SMOOTH_CORNERS">SMOOTH_CORNERS · fillet circular</option><option value="PRESERVE_PATH">PRESERVE_PATH · XYZ exacto</option></select></label><label>Selección de radio<select id="radius-mode"><option value="adaptive">Adaptativo por boquilla y C</option><option value="fixed">Fijo</option></select></label><label>Longitud de boquilla <span>mm</span><input id="nozzle-length" type="number" value="30" min="0.1"></label><label>Factor de radio preferido<input id="radius-factor" type="number" value="1" min="0.01" step="0.1"></label><label>Radio máximo opcional <span>mm</span><input id="radius-max" type="number" min="0.01" placeholder="Sin límite adicional"></label><label>Radio en modo fijo <span>mm</span><input id="fillet-radius" type="number" value="10" min="0.01" step="0.5"></label><label>Detectar desde <span>°</span><input id="fillet-threshold" type="number" value="25" min="1" max="174" step="1"></label><label>Desviación máxima <span>mm</span><input id="fillet-deviation" placeholder="Sin límite adicional" type="number" value="" min="0.001" step="0.1"></label><label>Tramo restante mínimo <span>mm</span><input id="fillet-remaining" type="number" value="5" min="0" step="0.1"></label><label>Error de cuerda máx. <span>mm</span><input id="fillet-chord-error" type="number" value=".3" min="0.001" step="0.01"></label></div><p class="hint">SMOOTH_CORNERS modifica XY únicamente alrededor de vértices factibles.</p></div>
+          <div class="panel"><h2>Esquinas</h2><div class="fields"><label>Estrategia<select id="strategy"><option value="adaptive">Adaptativa</option><option value="preturn_blend">Giro anticipado</option><option value="exact_vertex">Vértice exacto</option></select></label><label>Giro suave hasta <span>°</span><input id="smooth" type="number" value="8" min="0" step="1"></label><label>Esquina fuerte desde <span>°</span><input id="sharp" type="number" value="45" min="1" step="1"></label><label>Pretransición máx. <span>mm</span><input id="pretransition" type="number" value="20" min="0.1" step="0.1"></label><label>Fracción entrante <span>0–1</span><input id="fraction" type="number" value="0.6" min="0.01" max="1" step="0.05"></label><label class="check"><input id="allow-c-only" type="checkbox"> Permitir C-only en vértice exacto</label></div></div>
+          <div class="panel"><h2>Muestreo</h2><div class="fields"><label>ΔC máximo <span>°</span><input id="max-delta" type="number" value="15" min="0.01" step="0.1"></label><label>Error angular máx. <span>°</span><input id="max-error" type="number" value="1" min="0.001" step="0.05"></label><label>Longitud máx. en curvas <span>mm</span><input id="max-step" type="number" value="10" min="0.01" step="0.5"></label></div></div>
+          <div class="panel"><h2>Cinemática</h2><div class="fields"><label>Velocidad C máx. <span>°/s</span><input id="max-velocity" type="number" min="0.01" placeholder="Sin configurar"></label><label>Aceleración C máx. <span>°/s²</span><input id="max-acceleration" type="number" min="0.01" placeholder="Sin configurar"></label></div><p class="hint">Sin límites configurados se informa la demanda, sin declarar PASS.</p></div>
+          <div class="panel"><h2>Simplificación</h2><div class="fields"><label class="check"><input id="simplify-enabled" type="checkbox" checked> Reducir puntos con doble tolerancia</label><label>Error geométrico <span>mm</span><input id="simplify-geometry" type="number" value=".3" min="0.000001" step="0.01"></label><label>Error de orientación <span>°</span><input id="simplify-angle" type="number" value="1" min="0.000001" step="0.01"></label></div><p class="hint">Conserva extremos, fillets y cambios de feed. En PRESERVE_PATH también respeta la tolerancia XY.</p></div>
+          <div class="panel"><h2>Alturas Z de capas</h2><div class="fields"><label class="check"><input id="z-enabled" type="checkbox" checked> Normalizar alturas de deposición</label><label>Primera capa <span>mm</span><input id="z-first" type="number" value="20" step="1"></label><label>Incremento posterior <span>mm</span><input id="z-height" type="number" value="18" min="0.001" step="1"></label><label>Umbral de microbloque <span>mm · diagnóstico</span><input id="micro-length" type="number" value="2" min="0" step="0.1"></label></div><p class="hint">20 → 38 → 56 → 74… MACHINE_SAFE_Z explícito se conserva. Las entradas diagonales a una capa se separan en Z-only y XY.</p></div><div class="panel"><h2>Cambio de capa</h2><div class="fields"><label class="check"><input id="safe-seam" type="checkbox"> Elegir inicio seguro en loops cerrados</label><label>Distancia a esquinas <span>mm</span><input id="corner-guard" type="number" value="20" min="0" step="1"></label></div><p class="hint">Reubica el inicio sobre una recta del mismo contorno. Las subidas Z mantienen XY constantes.</p></div>
+          <div class="panel"><h2>Proceso / feed</h2><div class="fields"><label>Política F<select id="feed-policy"><option value="PRESERVE_SOURCE">Conservar F de origen</option><option value="RECOMMEND">Recomendar sin modificar</option><option value="ADAPTIVE_EXPERIMENTAL">Adaptativo experimental</option></select></label><label>Factor experimental<input id="feed-factor" type="number" value="1" min="0.01" step="0.1" disabled></label></div><p class="hint">El modo experimental requiere límites reales de C. Sin ellos conserva F y muestra la demanda.</p></div>
+        </div>
+        <p class="hint">Antes de convertir, elige cómo tratar el cordón inicial. Si la primera capa tiene un cierre pendiente confirmado, la misma ventana te preguntará después cómo completarlo. El G-code exportado mueve XYZC; la extrusión de concreto se controla fuera del programa.</p>
+        <div class="action-bar"><div><strong id="convert-state">Listo para convertir</strong><small id="convert-detail">Carga un G-code para iniciar.</small></div><button class="primary big" id="convert-button" disabled>CONVERTIR XYZ → XYZC <span>↗</span></button></div>
+        <div id="downloads" class="downloads hidden"><a id="download-gcode" class="download">↓ G-code XYZC</a><a id="download-report" class="download">↓ Reporte JSON</a><a id="download-csv" class="download">↓ Samples CSV</a><p id="download-status" class="download-status" role="status" aria-live="polite"></p></div>
+      </section>
+      <section class="page" id="page-simulacion">
+        <div class="eyebrow">03 / VISUALIZACIÓN</div><h1>Simulación</h1><p class="lead">La simulación interpola las primitivas XYZC del plan exportado. Los puntos intermedios de los arcos solo se utilizan para dibujar.</p>
+        <div class="sim-options"><label><input id="show-native-arcs" type="checkbox" checked> Colores de primitivas</label><span class="detail-line">Celeste: arco original · Amarillo: fillet · Verde: curva ajustada · Rosa: G1 de respaldo. Pulsa un arco para inspeccionarlo.</span></div>
+        <div class="sim-toolbar"><label>Capa<select id="layer-select"><option value="all">Todas</option></select></label><label>Trazo<select id="stroke-select"><option value="all">Todos</option></select></label><label>Comparar<select id="path-compare"><option value="both">Original + optimizada</option><option value="original">Solo original</option><option value="optimized">Solo optimizada</option></select></label><div class="segmented"><button id="view-2d" class="selected">VISTA XY</button><button id="view-3d">VISTA 3D</button></div></div>
+        <div id="camera-controls" class="camera-controls hidden"><button id="camera-reset">Reset cámara</button><button id="camera-top">Superior</button><button id="camera-front">Frontal</button><button id="camera-side">Lateral</button><button id="camera-iso">Isométrica</button><button id="camera-fit">Fit model</button><button id="camera-pan" aria-pressed="false">Modo pan</button><span>Arrastrar: órbita · Mayús/ botón derecho: pan · Rueda: zoom</span></div>
+        <div class="canvas-panel"><canvas id="sim-canvas"></canvas><div class="canvas-legend"><span><i class="swatch original"></i> Original</span><span><i class="swatch converted"></i> Optimizada</span><span><i class="swatch corner"></i> Fillet</span><span><i class="swatch cordon-swatch"></i> Cordón</span></div></div>
+        <div class="sim-options"><label>Inicio de animación<select id="start-mode"><option value="deposition">DEPOSITION START</option><option value="program">PROGRAM START</option></select></label><label class="inline-check"><input type="checkbox" id="show-vectors" checked> Vectores tangentes</label><label class="inline-check"><input type="checkbox" id="show-debug"> Debug T1/T2/centro</label></div>
+        <div class="sim-options"><label><input id="show-raw-points" type="checkbox"> Puntos de entrada</label><label><input id="show-optimized-points" type="checkbox" checked> Puntos optimizados</label><label><input id="show-corners" type="checkbox" checked> Esquinas</label><label><input id="show-fillets" type="checkbox" checked> Fillets</label><label><input id="show-nozzle" type="checkbox" checked> Orientación de boquilla</label><label><input id="show-legacy" type="checkbox"> Muestras legacy</label><button id="load-legacy" class="example-button">Calcular comparación legacy</button><span id="legacy-status" class="detail-line"></span></div><div id="corner-detail" class="detail-line"></div>
+        <div class="playback"><button id="play-button" aria-label="Reproducir">▶</button><label>Reproducción<select id="play-mode"><option value="continuous">Continua según F</option><option value="blocks">Por bloques G-code</option></select></label><input id="timeline" aria-label="Progreso del recorrido" type="range" min="0" max="0" step="0.001" value="0"><span id="timeline-label" aria-live="off">0 / 0</span><label>Velocidad visual<select id="play-speed"><option value="0.1">0,1×</option><option value="0.25">0,25×</option><option value="0.5">0,5×</option><option value="1" selected>1×</option><option value="3">3×</option><option value="10">10×</option></select></label></div>
+        <p id="playback-hint" class="hint">Continua: avanza según longitud y F. Por bloques: muestra los puntos uno a uno. La velocidad visual solo regula la animación.</p>
+        <div id="sample-detail" class="detail-line">Carga y convierte un archivo para ver la simulación.</div>
+        <div class="sim-options"><label>Inspeccionar muestra<input id="sample-id" type="number" min="1" value="1"></label><button id="inspect-sample" class="example-button">Enfocar muestra</button><label>Estado de inspección<select id="debug-stage"><option value="SAMPLED">SAMPLED · movimiento final</option><option value="RAW">RAW · diseño original</option><option value="CLASSIFIED">CLASSIFIED · clasificación</option><option value="PRINTABLE">PRINTABLE · geometría imprimible</option><option value="ORIENTATION">ORIENTATION · tangente y C</option></select></label></div>
+        <pre id="stage-detail" class="stage-detail hidden"></pre>
+      </section>
+      <section class="page" id="page-auditoria">
+        <div class="eyebrow">04 / VERIFICACIÓN</div><h1>Auditoría cuantitativa</h1><p class="lead">Comprueba geometría, orientación, esquinas y demanda del eje C antes de exportar.</p>
+        <div id="audit-summary" class="audit-grid"></div>
+        <div class="section-head"><h2>Capas</h2><span>GEOMETRÍA XY</span></div><div id="layer-audit" class="table-wrap empty-panel">Sin conversión.</div>
+        <div class="section-head"><h2>Fillets y esquinas</h2><span>GEOMETRÍA + ORIENTACIÓN</span></div><div id="corner-audit" class="table-wrap empty-panel">Sin conversión.</div>
+        <div class="section-head"><h2>Curvas de diagnóstico</h2><select id="chart-metric"><option value="segment_length_mm">Longitud de bloque vs recorrido</option><option value="C_deg">C vs longitud</option><option value="heading_unwrapped_deg">Theta vs longitud</option><option value="curvature_1_mm">Curvatura vs longitud</option><option value="feed_mm_min">F vs longitud</option><option value="omega_C_deg_s">ω C vs longitud</option><option value="alpha_C_deg_s2">α C vs longitud</option><option value="Z">Z vs longitud</option></select></div><div class="chart-panel"><canvas id="audit-chart"></canvas></div>
+        <div class="section-head"><h2>Resultados y trazabilidad</h2></div><div id="optimization-metrics" class="summary-grid"></div><div id="conversion-identity" class="detail-line"></div>
+        <div class="section-head"><h2>Feed y cambio de capa</h2></div><div id="process-audit" class="table-wrap"></div>
+        <div id="density-report" class="message-box"></div><div id="z-report" class="message-box"></div><div id="cordon-report" class="hidden"></div><div id="closure-report" class="hidden"></div><div id="messages"></div>
+      </section>
+      <section class="page" id="page-configuracion">
+        <div class="eyebrow">05 / SISTEMA</div><h1>Configuración</h1><p class="lead">Parámetros de precisión y reglas de exportación.</p>
+        <div class="panel narrow"><h2>Referencia de curvas complejas</h2><div class="fields"><label>Modelo de curva<select id="curve-reference-model"><option value="POLYLINE_C">Compatible · polilínea y C anterior</option><option value="PARAMETRIC_HERMITE">Nuevo · reconstrucción paramétrica acotada</option></select></label></div><p class="hint">La reconstrucción usa una sola curva para XYZ y la tangente C, con presupuesto geométrico y biarcos de unión sobre la curva. El límite angular se mide respecto a la curva reconstruida, no al PCHIP anterior. Al elegir este modo se proponen 6 decimales XYZ/C/IJ, visibles en Salida; puedes ajustarlos y se audita el G-code redondeado. Conserva eventos y esquinas y usa G1 verificado donde no admite arcos. PRESERVE_PATH mantiene el modo compatible. Activa Exportar G2/G3 y Ajustar curvas libres para utilizarla.</p></div>
+        <div class="panel narrow"><h2>Arcos nativos XYZC</h2><div class="fields"><label><input id="native-arcs-enabled" type="checkbox" checked> Exportar G2/G3 con C</label><label><input id="arc-fit-enabled" type="checkbox" checked> Ajustar curvas libres</label><label><input id="arc-fit-refinement" type="checkbox" checked> Refinar curvas cuando reduzca bloques</label><label>Formato de arco<select id="arc-output-format"><option value="AUTO">AUTO · R en fillets, I/J en curvas</option><option value="CENTER_IJK">Centro I/J</option><option value="RADIUS_R">Radio R · I/J si R es inseguro</option></select></label><label>Error de ajuste <span>mm</span><input id="arc-fit-geometry" type="number" value="0.30" min="0.000001" step="0.01"></label><label>Error de tangente / C <span>°</span><input id="arc-fit-angle" type="number" value="1" min="0.000001" step="0.1"></label><label>Radio mínimo <span>mm</span><input id="arc-fit-radius" type="number" value="5" min="0.000001" step="1"></label></div><p class="hint">Las curvas libres usan biarcos con tangente común y proporción variable. Se comprueban los errores entre puntos y se conserva G1 donde el ajuste no cumple. El refinamiento se acepta cuando reduce bloques de máquina. La tolerancia efectiva es la menor de ajuste, muestreo y simplificación; PRESERVE_PATH añade su límite XY estricto.</p></div>
+        <div class="panel narrow"><h2>Salida</h2><div class="fields"><label>Decimales XYZ<input id="xyz-decimals" type="number" value="3" min="0" max="9"></label><label>Decimales C<input id="c-decimals" type="number" value="3" min="0" max="9"></label><label>Decimales F<input id="f-decimals" type="number" value="3" min="0" max="9"></label><label>Decimales I/J<input id="ijk-decimals" type="number" value="4" min="0" max="9"></label><label>Decimales R<input id="radius-decimals" type="number" value="4" min="0" max="9"></label><label>Tolerancia XY <span>mm</span><input id="xy-tolerance" type="number" value="0.000001" min="0.000000001" step="0.000001"></label></div><p class="hint">Los decimales se respetan exactamente en el archivo exportado. La tolerancia XY controla la geometría interna; el redondeo final se audita por separado.</p></div>
+        <div class="info-box"><strong>Separación física</strong><p>Este programa genera G-code. LinuxCNC controla los ejes y el driver en tiempo real. La rotación C no altera el centro XYZ de la boquilla.</p></div>
+      </section>
+    </main>
+  </div>
+  <dialog id="closure-dialog" class="closure-dialog" aria-labelledby="closure-title" aria-describedby="closure-description">
+    <form method="dialog">
+      <div id="cordon-stage">
+        <div class="eyebrow">PASO 1 · INICIO DE MATERIAL</div>
+        <h2 id="closure-title">¿Cómo tratar el cordón inicial?</h2>
+        <p id="closure-description">El cordón termina en el inicio de la figura. Te indica qué tramo de concreto retirar manualmente.</p>
+        <div id="cordon-details" class="closure-details"></div>
+        <p id="cordon-warning" class="closure-explanation"></p>
+        <div class="cordon-actions">
+          <button type="button" id="cordon-add" value="add" class="primary">Añadir cordón de 65 mm</button>
+          <button type="button" id="cordon-keep" value="keep" class="secondary">Mantener cordón</button>
+          <button type="button" id="cordon-omit" value="omit" class="secondary" autofocus>Sin cordón</button>
+        </div>
+      </div>
+      <div id="closure-stage" class="hidden">
+        <div class="eyebrow">PASO 2 · CIERRE DE CAPA</div>
+        <h2 id="closure-title-step2">Primera capa: falta de cierre</h2>
+        <p id="closure-description-step2">Las capas siguientes confirman un regreso al punto de inicio que falta antes de la primera subida.</p>
+        <div id="closure-details" class="closure-details"></div>
+        <p class="closure-explanation">Al completar, el recorrido regresará al inicio antes de subir y se cerrará también la última capa. La elección se guardará en la auditoría.</p>
+        <div class="closure-actions">
+          <button id="closure-preserve" value="preserve" class="secondary">Mantener recorrido</button>
+          <button id="closure-complete" value="complete" class="primary">Completar cierre</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
