@@ -1,0 +1,18 @@
+# Private access is enforced by backend.hosted, including frontend and downloads.
+services:
+  - type: web
+    name: concreto-xyzc-privado
+    runtime: python
+    plan: free
+    numInstances: 1
+    autoDeployTrigger: "off"
+    buildCommand: pip install -r requirements-web-lock.txt
+    startCommand: python -m backend.hosted
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.14
+      - key: XYZC_PRIVATE_USER
+        value: propietario
+      - key: XYZC_PRIVATE_PASSWORD
+        generateValue: true

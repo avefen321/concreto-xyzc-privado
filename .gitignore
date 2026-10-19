@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.packages/
+.pytest_cache/
+.venv-web/
+.env
+.env.*
+!.env.example
+deployment/*.zip
