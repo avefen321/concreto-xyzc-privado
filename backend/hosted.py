@@ -1,4 +1,4 @@
-"""Private ASGI entrypoint; the local server and geometry engine are unchanged."""
+"""ASGI entrypoint for Render; the local server and geometry engine are unchanged."""
 import base64
 import binascii
 import hashlib
@@ -58,12 +58,44 @@ class PrivateWebApplication:
         return await response(scope, receive, private_send)
 
 
+class PublicWebApplication:
+    """Expose the application without credentials while keeping responses private-cache safe."""
+    def __init__(self, application):
+        self.application = application
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] == 'lifespan':
+            return await self.application(scope, receive, send)
+        if scope['type'] == 'websocket':
+            return await send({'type': 'websocket.close', 'code': 1008})
+
+        async def public_send(message):
+            if message['type'] == 'http.response.start':
+                replaced = {b'cache-control', b'referrer-policy'}
+                headers = [(name, value) for name, value in message.get('headers', [])
+                           if name.lower() not in replaced]
+                headers.extend([(b'cache-control', b'no-store'),
+                                (b'referrer-policy', b'same-origin')])
+                message = dict(message, headers=headers)
+            await send(message)
+
+        if scope['path'] == '/healthz' and scope['method'] in ('GET', 'HEAD'):
+            response = JSONResponse({'status': 'ok'})
+            return await response(scope, receive, public_send)
+        return await self.application(scope, receive, public_send)
+
+
 def create_app():
+    public_access = os.environ.get('XYZC_PUBLIC_ACCESS', '').strip().lower() in {
+        '1', 'true', 'yes', 'on'
+    }
+    from .main import app
+    if public_access:
+        return PublicWebApplication(app)
     username = os.environ.get('XYZC_PRIVATE_USER', '')
     password = os.environ.get('XYZC_PRIVATE_PASSWORD', '')
     if not username or ':' in username or any(ord(c) < 32 for c in username) or len(password) < 24:
         raise RuntimeError('Configure XYZC_PRIVATE_USER y XYZC_PRIVATE_PASSWORD (mínimo 24 caracteres); no se permite iniciar sin protección.')
-    from .main import app
     return PrivateWebApplication(app, username, password)
 
 

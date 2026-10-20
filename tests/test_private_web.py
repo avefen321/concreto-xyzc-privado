@@ -19,7 +19,9 @@ class PrivateWebTests(unittest.TestCase):
     password = 'test-only-secret-with-more-than-24-characters'
 
     def setUp(self):
-        with patch.dict(os.environ, {'XYZC_PRIVATE_USER': self.username, 'XYZC_PRIVATE_PASSWORD': self.password}):
+        with patch.dict(os.environ, {'XYZC_PUBLIC_ACCESS': 'false',
+                                     'XYZC_PRIVATE_USER': self.username,
+                                     'XYZC_PRIVATE_PASSWORD': self.password}):
             self.application = create_app()
         self.client = TestClient(self.application)
         self.client.__enter__()
@@ -30,9 +32,30 @@ class PrivateWebTests(unittest.TestCase):
     def test_missing_or_weak_secrets_fail_closed(self):
         for username, password in (('', self.password), (self.username, ''), ('bad:name', self.password),
                                    (self.username, 'short'), ('bad\nname', self.password)):
-            with patch.dict(os.environ, {'XYZC_PRIVATE_USER': username, 'XYZC_PRIVATE_PASSWORD': password}):
+            with patch.dict(os.environ, {'XYZC_PUBLIC_ACCESS': 'false',
+                                         'XYZC_PRIVATE_USER': username,
+                                         'XYZC_PRIVATE_PASSWORD': password}):
                 with self.assertRaises(RuntimeError):
                     create_app()
+
+    def test_explicit_public_mode_needs_no_credentials(self):
+        with patch.dict(os.environ, {'XYZC_PUBLIC_ACCESS': 'true',
+                                     'XYZC_PRIVATE_USER': '',
+                                     'XYZC_PRIVATE_PASSWORD': ''}):
+            public_client = TestClient(create_app())
+            with public_client:
+                self.assertEqual(public_client.get('/healthz').json(), {'status': 'ok'})
+                self.assertEqual(public_client.get('/').status_code, 200)
+                config = public_client.get('/api/config')
+                self.assertEqual(config.status_code, 200)
+                self.assertIn('defaults', config.json())
+                converted = public_client.post('/api/convert', json={
+                    'source': 'G21 G90\nM3\nG1 X100 Y0 F600\nM5\nM2\n',
+                    'filename': 'public-smoke.ngc',
+                    'config': {'cordon': {'mode': 'omit'}}})
+                self.assertEqual(converted.status_code, 200)
+                self.assertNotEqual(converted.json()['status'], 'FAIL')
+                self.assertEqual(converted.json()['report']['backend_version'], '3.6.0')
 
     def test_every_application_surface_requires_authentication(self):
         for path in ('/', '/css/app.css', '/js/app.js', '/examples/contorno_organico.ngc',

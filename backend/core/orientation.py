@@ -66,7 +66,8 @@ class Corner:
 
 
 class Field:
-    def __init__(self, stroke: Stroke, config: Config, previous_c: float | None = None):
+    def __init__(self, stroke: Stroke, config: Config, previous_c: float | None = None,
+                 home_reference: bool = False, reference_shift_deg: float = 0.0):
         self.stroke = stroke
         self.config = config
         self.s = [0.0]
@@ -76,6 +77,7 @@ class Field:
         self.point_heading = []
         self.point_c = []
         self.point_curvature = []
+        self.reference_shift_deg = reference_shift_deg
         points = [p.xyz for p in stroke.points]
         for index, (a, b) in enumerate(zip(points, points[1:])):
             length = xy_length(a, b)
@@ -184,13 +186,13 @@ class Field:
                 self.point_heading[i]=nearest_equivalent_angle(math.degrees(math.atan2(dy,dx)),self.point_heading[i],360)
         offset = config.orientation_offset_deg
         for h in self.point_heading:
-            target = nozzle_angle(h, config)
+            target = nozzle_angle(h, config) + self.reference_shift_deg
             ref = self.point_c[-1] if self.point_c else previous_c
             self.point_c.append(nearest_equivalent_angle(target, ref, config.orientation.symmetry_period_deg) if ref is not None else target)
         for corner in self.corners:
             idx = corner.point_index
             ref = self.point_c[idx - 1]
-            self.point_c[idx] = nearest_equivalent_angle(corner.outgoing_heading_deg + offset, ref,
+            self.point_c[idx] = nearest_equivalent_angle(corner.outgoing_heading_deg + offset + self.reference_shift_deg, ref,
                                                           config.orientation.symmetry_period_deg)
         # Analytic sweeps carry the physical revolution, including >180° and full circles.
         for i,p in enumerate(stroke.points[1:]):
@@ -198,6 +200,13 @@ class Field:
                 target=self.point_c[i]+p.arc_sweep_deg
                 shift=target-self.point_c[i+1]
                 for j in range(i+1,len(self.point_c)): self.point_c[j]+=shift
+        # El operador alinea físicamente la boquilla con la primera tangente
+        # durante el homing. El campo conserva todas sus variaciones, pero se
+        # expresa desde C=0 para no ordenar el antiguo giro inicial C90.
+        if home_reference and self.point_c:
+            home_shift=-self.point_c[0]
+            self.reference_shift_deg+=home_shift
+            self.point_c=[value+home_shift for value in self.point_c]
         self.by_vertex = {corner.point_index: corner for corner in self.corners}
 
     def _smooth_slope(self, index: int) -> float:
@@ -231,7 +240,7 @@ class Field:
             if corner.strategy == 'EXACT_VERTEX':
                 return start
             position = self.s[segment_index] + t * self.seg_length[segment_index]
-            incoming = nearest_equivalent_angle(corner.incoming_heading_deg + self.config.orientation_offset_deg, start,
+            incoming = nearest_equivalent_angle(corner.incoming_heading_deg + self.config.orientation_offset_deg + self.reference_shift_deg, start,
                                                 self.config.orientation.symmetry_period_deg)
             if position <= corner.transition_start_s:
                 fraction = (position - self.s[segment_index]) / max(1e-12, corner.transition_start_s - self.s[segment_index])
@@ -268,7 +277,7 @@ class Field:
         if corner:
             if corner.strategy=='EXACT_VERTEX': return [(0.,1.,[start])]
             t0=max(0.,(corner.transition_start_s-self.s[i])/h)
-            incoming=nearest_equivalent_angle(corner.incoming_heading_deg+self.config.orientation_offset_deg,start,self.config.orientation.symmetry_period_deg)
+            incoming=nearest_equivalent_angle(corner.incoming_heading_deg+self.config.orientation_offset_deg+self.reference_shift_deg,start,self.config.orientation.symmetry_period_deg)
             result=[(0.,t0,[start,(incoming-start)/t0])] if t0>1e-12 else []
             coefficients=compose_affine([incoming,0,0,10*(end-incoming),-15*(end-incoming),6*(end-incoming)],-t0/(1-t0),1/(1-t0))
             return result+[(t0,1.,coefficients)]
@@ -294,7 +303,7 @@ class Field:
     def theta_at(self,i,t):
         if i+1 in self.by_vertex:
             return self.seg_unwrapped[i]
-        return self.at(i,t)-self.config.orientation_offset_deg
+        return self.at(i,t)-self.config.orientation_offset_deg-self.reference_shift_deg
 
     def curvature_at(self,i,t):
         arc=self.stroke.points[i+1]

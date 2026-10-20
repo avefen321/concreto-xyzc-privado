@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from pydantic import BaseModel
 from .core.config import Config
-from .core.gcode import parse, interpret, linearize_arcs
+from .core.gcode import parse, interpret, linearize_arcs, motion_extent_points
 from .core.layer_z import separate_layer_entries
 from .core.layer_completion import review_source, prepare_layer_closure
 from .core.cordon import prepare_cordon
@@ -13,7 +13,7 @@ from .core.conversion import convert, Result
 import asyncio
 
 ROOT = Path(__file__).resolve().parent.parent
-app = FastAPI(title="Concrete CNC XYZC", version="3.5.0")
+app = FastAPI(title="Concrete CNC XYZC", version="3.6.0")
 _results: dict[str, Result] = {}
 
 
@@ -77,7 +77,7 @@ async def parse_file(request: SourceRequest):
         motions, entry_warnings = separate_layer_entries(motions, config)
         warnings.extend(entry_warnings)
         strokes, layers, more = build(motions, config)
-        points = [m.end for m in motions] + ([motions[0].start] if motions else [])
+        points = [point for motion in motions for point in motion_extent_points(motion)]
         return {"filename": request.filename, "bytes": len(request.source.encode('utf-8')),
                 "lines": len(blocks), "counts": counts, "layers": len(layers), "strokes": len(strokes),
                 "ranges": {axis: [min(p[i] for p in points), max(p[i] for p in points)] if points else [0, 0]

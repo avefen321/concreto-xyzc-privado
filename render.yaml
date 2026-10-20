@@ -1,4 +1,5 @@
-# Private access is enforced by backend.hosted, including frontend and downloads.
+# Public web application. Private mode remains available by setting this value to false
+# and configuring XYZC_PRIVATE_USER / XYZC_PRIVATE_PASSWORD.
 services:
   - type: web
     name: concreto-xyzc-privado
@@ -12,6 +13,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.14
+      - key: XYZC_PUBLIC_ACCESS
+        value: "true"
       - key: XYZC_PRIVATE_USER
         value: propietario
       - key: XYZC_PRIVATE_PASSWORD

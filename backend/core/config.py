@@ -22,6 +22,7 @@ class Orientation:
     calibration_offset_deg: float = 0.0
     symmetry_period_deg: float = 360.0
     preorient_during_travel: bool = False
+    home_aligned_start: bool = True
 
 
 @dataclass
@@ -102,6 +103,7 @@ class LinuxCNC:
 class LayerTransition:
     safe_seam: bool = False
     corner_guard_mm: float = 20.0
+    alternate_open_paths: bool = False
 
 
 @dataclass
@@ -345,6 +347,8 @@ class Config:
             raise ValueError("min_segment_remaining_mm inválido")
         if self.orientation.preorient_during_travel:
             raise ValueError("La preorientación durante travel todavía no está implementada")
+        if type(self.orientation.home_aligned_start) is not bool:
+            raise ValueError('orientation.home_aligned_start debe ser booleano')
         if self.orientation.mode not in ('perpendicular', 'alignment'):
             raise ValueError('orientation.mode debe ser perpendicular o alignment')
         if self.orientation.perpendicular_sign not in (-1, 1):
@@ -364,6 +368,8 @@ class Config:
             raise ValueError('min_reference_layers debe ser un entero entre 2 y 1000')
         if self.layer_transition.corner_guard_mm < 0 or not 0 <= self.corner_detection.curvature_relative_tolerance <= 1:
             raise ValueError('Guard o tolerancia de curvatura inválida')
+        if type(self.layer_transition.safe_seam) is not bool or type(self.layer_transition.alternate_open_paths) is not bool:
+            raise ValueError('Las políticas de cambio de capa deben ser booleanas')
         for name in ("max_c_velocity_deg_s", "max_c_acceleration_deg_s2"):
             value = getattr(self.kinematics, name)
             if value is not None and (not math.isfinite(value) or value <= 0):

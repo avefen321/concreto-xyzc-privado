@@ -106,7 +106,14 @@ def stroke_display_points(stroke,config):
 
 
 def arc_parts(point):
-    return max(1,math.ceil(abs(point.arc_sweep_deg)/90-1e-10)) if (point.arc_source=='SOURCE_G2G3' and abs(point.arc_sweep_deg)>180-1e-8) else 1
+    sweep=abs(point.arc_sweep_deg)
+    # LinuxCNC accepts one complete center-format circle (I/J, P defaults to 1).
+    # Keep that analytic source motion as one machine primitive; tessellation is
+    # still used for the viewer.  Multi-turn source arcs remain quartered until
+    # the serializer emits their explicit P turn count.
+    if point.arc_source=='SOURCE_G2G3' and sweep>360+1e-8:
+        return max(1,math.ceil(sweep/90-1e-10))
+    return 1
 
 
 def use_native_arc(point,config):
@@ -139,7 +146,11 @@ def build_machine_primitives(fields,motions,samples,config):
                 start_c=f.at(s.field_segment,ta)
         elif native_enabled(config) and config.native_arcs.source_arcs.preserve and s.motion_type in ('ARC_CW','ARC_CCW'):
             m=motions[int(s.motion_index)]; cx,cy,r,a0,sweep=arc_geometry(m)
-            parts=max(1,math.ceil(abs(math.degrees(sweep))/90-1e-10))
+            sweep_deg=abs(math.degrees(sweep))
+            parts=max(1,math.ceil(sweep_deg/90-1e-10)) if sweep_deg>360+1e-8 else 1
+            rank=round(s.t*parts)
+            if rank==0 or abs(s.t-rank/parts)>1e-8:
+                s.emit=False; s.display_only=True; continue
             ta=max(0.,s.t-1/parts)
             start=m.start if ta==0 else (cx+r*math.cos(a0+sweep*ta),cy+r*math.sin(a0+sweep*ta),m.start[2]+(m.end[2]-m.start[2])*ta)
             geometry=(start,(s.X,s.Y,s.Z),(cx,cy,start[2]),r,sweep/parts,'SOURCE_G2G3',{})
@@ -150,11 +161,13 @@ def build_machine_primitives(fields,motions,samples,config):
                     feed=s.feed_mm_min,process_state='DEPOSIT' if s.deposition_active else 'TRAVEL',
                     source_line=s.source_line,sample_id=s.sample_id,anchor_line=s.anchor_line,
                     motion_type=s.motion_type,generated_reason=s.generated_reason,E=s.E,
-                    metadata={'source_lines':s.source_lines,'fallback':s.primitive_type=='SMOOTH_CURVE'})
+                    metadata={'source_lines':s.source_lines,'fallback':s.primitive_type=='SMOOTH_CURVE',
+                              'c_reference_shift_deg':s.c_reference_shift_deg})
         if geometry:
             start,end,center,r,sweep,source,metadata=geometry
             kwargs.update(start_xyz=start,end_xyz=end,start_c=start_c,
-                          metadata=dict(metadata,source_lines=s.source_lines,fillet_id=s.fillet_id),
+                          metadata=dict(metadata,source_lines=s.source_lines,fillet_id=s.fillet_id,
+                                        c_reference_shift_deg=s.c_reference_shift_deg),
                           center_xyz=center,radius=r,sweep_rad=sweep,direction='CCW' if sweep>0 else 'CW',
                           start_angle_rad=math.atan2(start[1]-center[1],start[0]-center[0]),arc_source=source)
             primitive=ArcPrimitive(**kwargs)

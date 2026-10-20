@@ -21,12 +21,20 @@ class SerializationValidator:
         if [s.sample_id for s in emitted]!=[r['sample_id'] for r in rows]:
             errors.append('El orden serializado difiere del FinalMotionPlan')
         blocks=parse(gcode)
+        roundtrip,_=interpret(blocks)
+        motion_by_line={motion.line:motion for motion in roundtrip}
         by_id={s.sample_id:s for s in emitted}
         for row in rows:
             s=by_id[row['sample_id']]; b=blocks[row['output_line']-1]
+            motion=motion_by_line.get(row['output_line'])
+            if motion is None:
+                errors.append(f"Línea {row['output_line']}: bloque serializado sin movimiento")
+                continue
             if s.motion_type!='C_ONLY':
-                max_xyz=max(max_xyz,math.dist((s.X,s.Y,s.Z),tuple(b.value(k) for k in 'XYZ')))
-            max_c=max(max_c,abs(b.value('C')-s.C_deg))
+                # Compare the modal endpoint reconstructed by the interpreter.
+                # Full I/J circles intentionally omit X and Y in LinuxCNC.
+                max_xyz=max(max_xyz,math.dist((s.X,s.Y,s.Z),motion.end))
+            max_c=max(max_c,abs(motion.c_end-s.C_deg))
             if b.value('F') is not None and s.feed_mm_min is not None and s.motion_type!='C_ONLY':
                 max_f=max(max_f,abs(b.value('F')-s.feed_mm_min))
         xyz_budget=math.sqrt(3)*0.5*10**(-config.serialization.xyz_decimals)+1e-9
@@ -60,8 +68,11 @@ class NativeArcValidator:
                         if math.dist(m.start[:2],m.end[:2])<1e-12:
                             errors.append(f'{p.id}: redondeo colapsa un G1 reconstruido'); continue
                         targets=[math.degrees(math.atan2(m.end[1]-m.start[1],m.end[0]-m.start[0]))+config.orientation_offset_deg]*2
+                    pose_reference_shift=p.metadata.get('c_reference_shift_deg',0.0)
                     for actual,target in zip((m.c_start,m.c_end),targets):
-                        reconstructed_pose_error=max(reconstructed_pose_error,abs(nearest_equivalent_angle(actual,target,config.orientation.symmetry_period_deg)-target))
+                        expected=nearest_equivalent_angle(target+pose_reference_shift,actual,
+                                                          config.orientation.symmetry_period_deg)
+                        reconstructed_pose_error=max(reconstructed_pose_error,abs(actual-expected))
                 if p.type!='ARC': continue
                 if not m.kind.startswith('ARC'): errors.append(f'{p.id}: perdió tipo ARC'); continue
                 count+=1
@@ -125,8 +136,9 @@ class OrientationValidator:
         for s in samples:
             if s.tangent_xy is None: continue
             unit=max(unit,abs(math.hypot(*s.tangent_xy)-1),abs(math.hypot(*s.nozzle_vector_xy)-1))
-            physical=max(physical,abs(s.nozzle_vector_xy[0]-math.cos(math.radians(s.C_deg))),
-                         abs(s.nozzle_vector_xy[1]-math.sin(math.radians(s.C_deg))))
+            physical_angle=s.C_deg-s.c_reference_shift_deg
+            physical=max(physical,abs(s.nozzle_vector_xy[0]-math.cos(math.radians(physical_angle))),
+                         abs(s.nozzle_vector_xy[1]-math.sin(math.radians(physical_angle))))
         return {'status':'PASS' if max(unit,physical)<1e-8 else 'FAIL','max_unit_vector_error':unit,'max_pose_vector_error':physical}
 
 

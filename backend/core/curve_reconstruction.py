@@ -238,6 +238,45 @@ def reconstruct_stroke(stroke,config,previous_c=None):
     points=[]; logs=[]; i=0
     geometry=min(config.arc_fit.geometry_tolerance_mm,config.sampling.geometry_error_mm,
                  config.simplification.geometry_tolerance_mm)
+    def fit_span(start,end,depth=0):
+        """Keep a singular subspan in G1 without discarding its smooth neighbours."""
+        try:
+            reference=ParametricReference(stroke,field,start,end,geometry*config.arc_fit.reconstruction_budget_fraction)
+            fitter=ReconstructionFitter(reference,config); part=[]
+            cuts=reference.cuts()
+            for a,b in zip(cuts,cuts[1:]):
+                interval=fitter.fit(a,b)
+                if part:
+                    part[-1]=replace(part[-1],heading_override_deg=interval[0].heading_override_deg)
+                    part.extend(interval[1:])
+                else: part.extend(interval)
+            arcs=sum(p.arc_center is not None for p in part[1:])
+            reasons={}
+            for p in part[1:]:
+                if p.arc_center is None:
+                    reason=p.fit_metadata.get('fallback_reason','UNKNOWN')
+                    reasons[reason]=reasons.get(reason,0)+1
+            return part,[{'span_id':f'{stroke.id}:{start}-{end}','classification':'PARAMETRIC_CURVE',
+                          'source_point_count':end-start+1,'split_reason':None,'output':'PARAMETRIC_SPLINE',
+                          'primitive_count':len(part)-1,'arc_count':arcs,'line_count':len(part)-1-arcs,
+                          'reference_model':MODEL,'closed_periodic':reference.closed,
+                          'fallback_reasons':reasons,
+                          'reconstruction_bound_mm':reference.source_error_bound,'inflection_cuts':len(cuts)-2,
+                          'max_error':max(p.fit_metadata['max_fit_error_mm'] for p in part[1:])}]
+        except ValueError as error:
+            reason=str(error)
+            if (reason=='No se pudo certificar el tramo paramétrico' and depth<12 and
+                    end-start>=2*config.arc_fit.minimum_source_points):
+                middle=(start+end)//2
+                left,left_logs=fit_span(start,middle,depth+1)
+                right,right_logs=fit_span(middle,end,depth+1)
+                if right[0].heading_override_deg is not None:
+                    left[-1]=replace(left[-1],heading_override_deg=right[0].heading_override_deg)
+                return left+right[1:],left_logs+right_logs
+            return stroke.points[start:end+1],[{'span_id':f'{stroke.id}:{start}-{end}',
+                            'classification':'PARAMETRIC_CURVE','source_point_count':end-start+1,
+                            'split_reason':reason,'output':'G1_FALLBACK',
+                            'primitive_count':end-start,'max_error':None,'reference_model':MODEL}]
     while i<n:
         end=i+1
         if eligible[i]:
@@ -245,34 +284,8 @@ def reconstruct_stroke(stroke,config,previous_c=None):
         if not eligible[i] or end-i+1<config.arc_fit.minimum_source_points:
             part=stroke.points[i:end+1]
         else:
-            try:
-                reference=ParametricReference(stroke,field,i,end,geometry*config.arc_fit.reconstruction_budget_fraction)
-                fitter=ReconstructionFitter(reference,config); part=[]
-                cuts=reference.cuts()
-                for a,b in zip(cuts,cuts[1:]):
-                    interval=fitter.fit(a,b)
-                    if part:
-                        part[-1]=replace(part[-1],heading_override_deg=interval[0].heading_override_deg)
-                        part.extend(interval[1:])
-                    else: part.extend(interval)
-                arcs=sum(p.arc_center is not None for p in part[1:])
-                reasons={}
-                for p in part[1:]:
-                    if p.arc_center is None:
-                        reason=p.fit_metadata.get('fallback_reason','UNKNOWN')
-                        reasons[reason]=reasons.get(reason,0)+1
-                logs.append({'span_id':f'{stroke.id}:{i}-{end}','classification':'PARAMETRIC_CURVE',
-                             'source_point_count':end-i+1,'split_reason':None,'output':'PARAMETRIC_SPLINE',
-                             'primitive_count':len(part)-1,'arc_count':arcs,'line_count':len(part)-1-arcs,
-                             'reference_model':MODEL,'closed_periodic':reference.closed,
-                             'fallback_reasons':reasons,
-                             'reconstruction_bound_mm':reference.source_error_bound,'inflection_cuts':len(cuts)-2,
-                             'max_error':max(p.fit_metadata['max_fit_error_mm'] for p in part[1:])})
-            except ValueError as error:
-                part=stroke.points[i:end+1]
-                logs.append({'span_id':f'{stroke.id}:{i}-{end}','classification':'PARAMETRIC_CURVE',
-                             'source_point_count':end-i+1,'split_reason':str(error),'output':'G1_FALLBACK',
-                             'primitive_count':end-i,'max_error':None,'reference_model':MODEL})
+            part,part_logs=fit_span(i,end)
+            logs.extend(part_logs)
         if points:
             if part[0].heading_override_deg is not None:
                 points[-1]=replace(points[-1],heading_override_deg=part[0].heading_override_deg)

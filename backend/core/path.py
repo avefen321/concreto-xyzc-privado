@@ -60,7 +60,7 @@ def build(motions: list[Motion], config: Config) -> tuple[list[Stroke], list[Lay
                 motion.kind = 'Z_ONLY'
             current = None
             continue
-        if distance < config.geometry.tiny_segment_warning_mm:
+        if not is_arc and distance < config.geometry.tiny_segment_warning_mm:
             warnings.append(f"Línea {motion.line}: segmento XY pequeño ({distance:.5f} mm)")
         deposition = motion.deposition and motion.kind != 'RAPID'
         layer_id = None

@@ -10,7 +10,7 @@ import json
 import mimetypes
 import threading
 from .core.config import Config
-from .core.gcode import parse, interpret, linearize_arcs
+from .core.gcode import parse, interpret, linearize_arcs, motion_extent_points
 from .core.layer_z import separate_layer_entries
 from .core.layer_completion import review_source, prepare_layer_closure
 from .core.cordon import prepare_cordon
@@ -95,7 +95,7 @@ class Handler(BaseHTTPRequestHandler):
                 motions, entry_warnings = separate_layer_entries(motions, config)
                 warnings.extend(entry_warnings)
                 strokes, layers, more = build(motions, config)
-                points = [m.end for m in motions] + ([motions[0].start] if motions else [])
+                points = [point for motion in motions for point in motion_extent_points(motion)]
                 self.send(200, {'filename': request.get('filename', 'input.ngc'),
                                 'bytes': len(source.encode('utf-8')), 'lines': len(blocks),
                                 'counts': counts, 'layers': len(layers), 'strokes': len(strokes),

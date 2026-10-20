@@ -8,6 +8,7 @@ from .config import Config
 from .gcode import parse, interpret, linearize_arcs, arc_geometry, Motion
 from .path import build, Stroke, Layer, xy_length, compress_collinear
 from .layer_z import separate_layer_entries, normalize_layers
+from .layer_paths import alternate_open_layer_paths
 from .layer_completion import prepare_layer_closure, validate_completed_closure
 from .cordon import prepare_cordon, validate_cordon
 from .sampling import CurveSampler
@@ -78,6 +79,7 @@ class Sample:
     z_conversion_applied: bool = False
     z_conversion_reason: str = 'DISABLED'
     z_role: str = 'TRAVEL_Z'
+    c_reference_shift_deg: float = 0.0
     segment_length_mm: float = 0.0
     feed_allowed_by_c_mm_min: float | None = None
     layer_closure_role: str | None = None
@@ -402,7 +404,17 @@ def _serialize(blocks, motions: list[Motion], plan: FinalMotionPlan, config: Con
         elif sample.type=='ARC':
             from .arc_serialization import arc_words
             command='G3' if sample.direction=='CCW' else 'G2'
-            text=f'{command} X{coordinate(sample.X)} Y{coordinate(sample.Y)} Z{coordinate(sample.Z)} '+arc_words(sample,config)+f' C{angle(sample.C_deg)}'
+            full_circle=(abs(abs(math.degrees(sample.sweep_rad))-360.)<=1e-7 and
+                         math.dist(sample.start_xyz[:2],sample.end_xyz[:2])<=1e-7)
+            if full_circle:
+                # LinuxCNC center format represents a complete circle by
+                # omitting the in-plane endpoint.  Z is present only for a
+                # helical circle; C remains synchronized with the XY motion.
+                axes=(f' Z{coordinate(sample.Z)}'
+                      if abs(sample.Z-sample.start_xyz[2])>1e-9 else '')
+            else:
+                axes=f' X{coordinate(sample.X)} Y{coordinate(sample.Y)} Z{coordinate(sample.Z)}'
+            text=f'{command}{axes} '+arc_words(sample,config)+f' C{angle(sample.C_deg)}'
             if sample.E is not None and not geometry_only: text+=' E'+coordinate(sample.E)
             if sample.feed_mm_min is not None: text+=' F'+feed(sample.feed_mm_min)
         else:
@@ -502,6 +514,9 @@ def convert(source: str, config: Config | None = None) -> Result:
                                                    for p in s.points[1:])),
                      'points':stroke_display_points(s,config)} for s in strokes]
     design_path = tuple((s.id,s.layer_id,s.deposition,tuple(p.xyz for p in s.points)) for s in strokes)
+    strokes,layers,open_transition_report,transition_warnings=alternate_open_layer_paths(
+        strokes,layers,motions,config)
+    warnings.extend(transition_warnings)
     z_report=normalize_layers(strokes,layers,motions,config)
     strokes=[compress_collinear(s,config) for s in strokes]
     canonical_program=[{'canonical_motion_id':i,'source_motion_id':m.source_motion_id,'source_line':m.line,
@@ -526,6 +541,7 @@ def convert(source: str, config: Config | None = None) -> Result:
     samples: list[Sample] = []
     s_global = 0.0
     previous_c = None
+    c_reference_shift = 0.0
     safe_seams=[]
     feed_rows=[]
     execution_order={}
@@ -570,7 +586,10 @@ def convert(source: str, config: Config | None = None) -> Result:
         for preceding in motions[last_print_motion_index:int(stroke.points[0].motion_index)]:
             if preceding.block.value('C') is not None: previous_c=preceding.c_end
         incoming_c=previous_c
-        field = Field(optimized, config, previous_c)
+        field = Field(optimized, config, previous_c,
+                      home_reference=(previous_c is None and config.orientation.home_aligned_start),
+                      reference_shift_deg=c_reference_shift)
+        c_reference_shift=field.reference_shift_deg
         planned_feeds, recommendations = plan_field(field,config)
         feed_rows.extend(recommendations)
         fields[stroke.id] = field
@@ -681,6 +700,7 @@ def convert(source: str, config: Config | None = None) -> Result:
                                           original_X=original[0], original_Y=original[1], original_Z=original[2]))
                     samples[-1].field_segment=i
         for rank,sample in enumerate(samples[stroke_sample_start:]):
+            sample.c_reference_shift_deg=field.reference_shift_deg
             execution_order[id(sample)]=(stroke.points[1].motion_index-0.5 if sample.motion_type=='PREP_RAPID' else stroke.points[1].motion_index,rank)
             if optimized.seam_reindexed and sample.deposition_active:
                 sample.anchor_line=stroke.points[1].line
@@ -728,6 +748,7 @@ def convert(source: str, config: Config | None = None) -> Result:
                                   motion.original_kind if motion.kind == 'Z_ONLY' else motion.kind, False,
                                   motion.e_end))
             samples[-1].generated_reason='LAYER_TRANSITION' if motion.kind=='Z_ONLY' else 'TRAVEL'
+            samples[-1].c_reference_shift_deg=c_reference_shift
             samples[-1].feed_source=motion.feed
             zr=z_report['motions'][i]
             if (not source_arc and xy_length(motion.start,motion.end)<=config.geometry.zero_length_tolerance_mm and
@@ -788,7 +809,7 @@ def convert(source: str, config: Config | None = None) -> Result:
         if sample.heading_unwrapped_deg is not None:
             theta=math.radians(sample.heading_unwrapped_deg)
             sample.tangent_xy=[math.cos(theta),math.sin(theta)]
-            c=math.radians(sample.C_deg)
+            c=math.radians(sample.C_deg-sample.c_reference_shift_deg)
             sample.nozzle_vector_xy=[math.cos(c),math.sin(c)]
         if previous_sample is not None:
             global_distance += xy_length((previous_sample.X, previous_sample.Y, 0),
@@ -905,9 +926,16 @@ def convert(source: str, config: Config | None = None) -> Result:
               "config_hash":config_hash,"conversion_id":conversion_id,"config":config.to_dict(),
               "z_conversion":z_report,"curve_spans":curve_spans,"density":density_report,
               "layer_completion":closure_report,
+              "open_path_transitions":open_transition_report,
               "cordon":cordon_report,
               "linuxcnc":{'policy':config.linuxcnc.path_mode,'source_modes':path_modes,'machine_mode_verified':False},
               "safe_seams":safe_seams,"simplification":simplification_report,
+              "initial_c_reference":{
+                  "mode":"HOME_ALIGNED_TANGENT" if config.orientation.home_aligned_start else "ABSOLUTE_MODEL",
+                  "manual_alignment_required":config.orientation.home_aligned_start,
+                  "first_print_c_deg":next((s.C_deg for s in samples if s.deposition_active),None),
+                  "reference_shift_deg":next((f.reference_shift_deg for f in fields.values()
+                                               if abs(f.reference_shift_deg)>config.precision.angle_epsilon_deg),0.0)},
               "feed_plan":{'policy':config.process.feed_policy,'primitives':feed_rows,
                            'unknown_feed_segments':sum(row['feed_source'] is None for row in feed_rows),
                            'final_feeds':[{'sample_id':s.sample_id,'source':s.feed_source,'planned':s.feed_mm_min,'recommended':s.feed_recommended} for s in samples if s.deposition_active]},

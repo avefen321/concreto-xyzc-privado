@@ -239,6 +239,23 @@ def arc_geometry(motion):
     return cx, cy, radius, a0, sweep
 
 
+def motion_extent_points(motion):
+    """Exact endpoint/cardinal samples sufficient for XYZ axis bounds."""
+    points=[motion.start,motion.end]
+    if motion.kind not in ('ARC_CW','ARC_CCW'):
+        return points
+    cx,cy,radius,a0,sweep=arc_geometry(motion)
+    magnitude=abs(sweep); direction=1 if sweep>0 else -1
+    for angle in (0.,math.pi/2,math.pi,3*math.pi/2):
+        distance=((angle-a0)%(2*math.pi) if direction>0 else
+                  (a0-angle)%(2*math.pi))
+        if distance<=magnitude+1e-12:
+            fraction=distance/magnitude if magnitude else 0.
+            points.append((cx+radius*math.cos(angle),cy+radius*math.sin(angle),
+                           motion.start[2]+(motion.end[2]-motion.start[2])*fraction))
+    return points
+
+
 def linearize_arcs(motions: list[Motion], max_step_mm: float = 1.0,
                    max_turn_deg: float = 2.0, max_chord_error_mm: float = 0.03) -> list[Motion]:
     """Discretize G17 arcs, preserving endpoints and source-line traceability."""

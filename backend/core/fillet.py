@@ -151,7 +151,11 @@ def optimize_stroke(stroke: Stroke, config: Config, preserve_closed_seam: bool =
     indices = list(range(1, len(raw) - 1)) + ([len(raw) - 1] if closed and not preserve_closed_seam else [])
     candidates = []
     classifications = classify_vertices(stroke, config)
-    corner_indices={i for i in indices if classifications.get(i,{}).get('category') not in ('LINE','SMOOTH_CURVE')
+    # A fillet here is constructed from two straight segments. The chord of a
+    # native G2/G3 arc is not its tangent, especially at a closed-layer seam.
+    corner_indices={i for i in indices if raw[i].arc_center is None and
+                    raw[1 if i==len(raw)-1 else i+1].arc_center is None and
+                    classifications.get(i,{}).get('category') not in ('LINE','SMOOTH_CURVE')
                     and abs(classifications.get(i,{}).get('turn_deg',0))>=config.corner_smoothing.detection_threshold_deg
                     and raw[i].heading_override_deg is None and not raw[i].locked}
     for index in indices:
