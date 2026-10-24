@@ -1,10 +1,10 @@
-# Concrete CNC XYZC 3.6.0 — despliegue público en Render
+# Concrete CNC XYZC 3.7.0 — despliegue público en Render
 
-Actualización: 20-10-2026. Este repositorio contiene únicamente los archivos necesarios para ejecutar la aplicación web; no incluye documentos personales, presentaciones, resultados históricos ni archivos G-code del usuario.
+Actualización: 23-10-2026. Este repositorio contiene únicamente los archivos necesarios para ejecutar la aplicación web; no incluye documentos personales, presentaciones, resultados históricos ni archivos G-code del usuario.
 
 ## Aplicación desplegada
 
-El frontend HTML/CSS/JavaScript y la API FastAPI se sirven desde el mismo proceso. El motor mantiene la conversión XYZC 3.6.0, curvas generales con G2/G3, círculos completos, referencia inicial C0, alternancia segura de trazos abiertos, seam para loops cerrados, importación, simulación y descargas.
+El frontend HTML/CSS/JavaScript y la API FastAPI se sirven desde el mismo proceso. El motor mantiene la conversión XYZC 3.7.0, curvas generales con G2/G3, círculos completos, home C0 sobre un eje físico y giro C-only en el punto inicial, alternancia segura de trazos abiertos, seam para loops cerrados, importación, simulación y descargas.
 
 Render ejecuta:
 
@@ -32,7 +32,7 @@ python -m pip install -r requirements-web-test.txt
 python -m unittest tests.test_private_web tests.test_public_web_asgi -v
 ```
 
-La prueba alojada comprueba ambos modos: el cierre de acceso privado y el acceso público explícito. En modo público valida `/healthz`, la interfaz, `/api/config` y una conversión sin cordón.
+La prueba alojada comprueba ambos modos: el cierre de acceso privado y el acceso público explícito. En modo público valida `/healthz`, la interfaz, `/api/config` y una conversión sin cordón. `tests/test_initial_orientation.py` cubre además el home físico en +X/+Y, el giro C-only anterior a la deposición, el feed rotativo G94, la compatibilidad de perfiles anteriores y programas de tres capas.
 
 Después de desplegar se debe comprobar la URL real, el estado `live`, `/healthz`, `/api/config`, una conversión y los logs recientes.
 

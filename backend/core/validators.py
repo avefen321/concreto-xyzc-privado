@@ -35,7 +35,7 @@ class SerializationValidator:
                 # Full I/J circles intentionally omit X and Y in LinuxCNC.
                 max_xyz=max(max_xyz,math.dist((s.X,s.Y,s.Z),motion.end))
             max_c=max(max_c,abs(motion.c_end-s.C_deg))
-            if b.value('F') is not None and s.feed_mm_min is not None and s.motion_type!='C_ONLY':
+            if b.value('F') is not None and s.feed_mm_min is not None:
                 max_f=max(max_f,abs(b.value('F')-s.feed_mm_min))
         xyz_budget=math.sqrt(3)*0.5*10**(-config.serialization.xyz_decimals)+1e-9
         c_budget=0.5*10**(-config.serialization.c_decimals)+1e-9
@@ -142,6 +142,46 @@ class OrientationValidator:
         return {'status':'PASS' if max(unit,physical)<1e-8 else 'FAIL','max_unit_vector_error':unit,'max_pose_vector_error':physical}
 
 
+class InitialAlignmentValidator:
+    name='InitialAlignment'
+    @staticmethod
+    def check(report,primitives,gcode,config):
+        reference=report.get('initial_c_reference',{})
+        if reference.get('mode')!='ROTATE_AT_START':
+            return {'status':'NOT CONFIGURED','mode':reference.get('mode')}
+        alignments=[p for p in primitives if p.generated_reason=='INITIAL_C_ALIGNMENT']
+        errors=[]
+        if reference.get('required'):
+            if len(alignments)!=1:
+                errors.append('Debe existir exactamente una alineación C inicial')
+            else:
+                p=alignments[0]
+                if p.type!='C_ONLY' or p.process_state!='TRAVEL':
+                    errors.append('La alineación inicial no es un C-only con proceso inactivo')
+                if math.dist(p.start_xyz,p.end_xyz)>config.precision.geometry_epsilon:
+                    errors.append('La alineación inicial modifica XYZ')
+                if abs(p.end_c-reference['target_c_deg'])>config.precision.angle_epsilon_deg:
+                    errors.append('La alineación inicial no alcanza el C objetivo')
+                first_deposition=next((i for i,q in enumerate(primitives)
+                                       if q.process_state=='DEPOSIT'),None)
+                if first_deposition is not None and primitives.index(p)>=first_deposition:
+                    errors.append('La alineación inicial ocurre después de comenzar la deposición')
+                lines=gcode.splitlines()
+                c_line=next((i for i,line in enumerate(lines)
+                             if line.startswith('G1 C') and
+                             f"C{p.end_c:.{config.serialization.c_decimals}f}" in line),None)
+                if c_line is None:
+                    errors.append('Bloque C-only inicial ausente del G-code')
+                elif c_line==0 or not lines[c_line-1].startswith('G61.1'):
+                    errors.append('Falta parada exacta G61.1 antes de orientar C')
+                elif c_line+1>=len(lines) or not lines[c_line+1].startswith(('G64','G61')):
+                    errors.append('No se restauró el modo de trayectoria después de orientar C')
+        elif alignments:
+            errors.append('Se generó un giro inicial redundante')
+        return {'status':'FAIL' if errors else 'PASS','errors':errors,
+                'alignment_count':len(alignments),'xyz_held':not errors or reference.get('xyz_held')}
+
+
 class GeometryValidator:
     name='Geometry'
     @staticmethod
@@ -219,7 +259,8 @@ def validate_final(samples,gcode,mapping,report,config,primitives=()):
             'Geometry':GeometryValidator.check(report),'Corners':CornerValidator.check(report),
             'Curves':CurveValidator.check(sampling),'Layers':LayerValidator.check(report),
             'Orientation':OrientationValidator.check(samples,config),'Kinematics':KinematicValidator.check(report),
-            'Sampling':sampling,'Serialization':SerializationValidator.check(gcode,mapping,samples,config)}
+            'Sampling':sampling,'Serialization':SerializationValidator.check(gcode,mapping,samples,config),
+            'InitialAlignment':InitialAlignmentValidator.check(report,primitives,gcode,config)}
     if report['orientation']['status']=='FAIL': checks['Orientation']['status']='FAIL'
     if primitives: checks['NativeArcs']=NativeArcValidator.check(gcode,primitives,config)
     if report.get('curve_reconstruction',{}).get('applied'):

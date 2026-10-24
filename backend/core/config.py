@@ -22,7 +22,14 @@ class Orientation:
     calibration_offset_deg: float = 0.0
     symmetry_period_deg: float = 360.0
     preorient_during_travel: bool = False
-    home_aligned_start: bool = True
+    # Explicit startup reference. ROTATE_AT_START lets the operator home C=0
+    # along a repeatable machine axis and performs the required C-only move at
+    # the first printable point.  The boolean remains as an input-compatibility
+    # alias for profiles created before 3.7.0.
+    initial_orientation_mode: str = "ROTATE_AT_START"
+    home_axis_deg: float = 0.0
+    initial_rotation_speed_deg_s: float = 10.0
+    home_aligned_start: bool = False
 
 
 @dataclass
@@ -77,7 +84,8 @@ class Simplification:
 
 @dataclass
 class Nozzle:
-    length_mm: float = 30.0
+    length_mm: float = 35.0
+    width_mm: float = 15.0
 
 
 @dataclass
@@ -251,6 +259,17 @@ class Config:
                         if hasattr(current,'__dataclass_fields__'): assign(current,value,prefix+'.'+key)
                         else: setattr(section,key,value)
                 assign(section,data[name],name)
+        # Profiles from 3.6 and earlier only contained home_aligned_start.
+        # Preserve their exact meaning unless the new mode is explicit.
+        orientation_data = data.get('orientation', {}) if isinstance(data, dict) else {}
+        if ('home_aligned_start' in orientation_data and
+                'initial_orientation_mode' not in orientation_data):
+            result.orientation.initial_orientation_mode = (
+                'HOME_ALIGNED_TANGENT' if result.orientation.home_aligned_start
+                else 'ABSOLUTE_MODEL')
+        elif 'initial_orientation_mode' in orientation_data:
+            result.orientation.home_aligned_start = (
+                result.orientation.initial_orientation_mode == 'HOME_ALIGNED_TANGENT')
         result.validate()
         return result
 
@@ -280,6 +299,7 @@ class Config:
             ('cordon.length_mm', self.cordon.length_mm),
             ('process.experimental_feed_factor', self.process.experimental_feed_factor))])
         positive.extend([('nozzle.length_mm',self.nozzle.length_mm),
+                         ('nozzle.width_mm',self.nozzle.width_mm),
                          ('corner_smoothing.preferred_radius_nozzle_factor',self.corner_smoothing.preferred_radius_nozzle_factor),
                          ('sampling.geometry_error_mm',self.sampling.geometry_error_mm),
                          ('z_conversion.subsequent_layer_height_mm',self.z_conversion.subsequent_layer_height_mm)])
@@ -349,6 +369,15 @@ class Config:
             raise ValueError("La preorientación durante travel todavía no está implementada")
         if type(self.orientation.home_aligned_start) is not bool:
             raise ValueError('orientation.home_aligned_start debe ser booleano')
+        if self.orientation.initial_orientation_mode not in (
+                'ROTATE_AT_START', 'HOME_ALIGNED_TANGENT', 'ABSOLUTE_MODEL'):
+            raise ValueError('orientation.initial_orientation_mode inválido')
+        if self.orientation.home_axis_deg not in (-90, 0, 90, 180):
+            raise ValueError('orientation.home_axis_deg debe ser -90, 0, 90 o 180')
+        if (not isinstance(self.orientation.initial_rotation_speed_deg_s, (int, float)) or
+                not math.isfinite(self.orientation.initial_rotation_speed_deg_s) or
+                self.orientation.initial_rotation_speed_deg_s <= 0):
+            raise ValueError('orientation.initial_rotation_speed_deg_s debe ser positivo y finito')
         if self.orientation.mode not in ('perpendicular', 'alignment'):
             raise ValueError('orientation.mode debe ser perpendicular o alignment')
         if self.orientation.perpendicular_sign not in (-1, 1):
@@ -393,6 +422,7 @@ class Config:
                             'max_path_deviation_mm':5.,'min_segment_remaining_mm':2.,
                             'max_delta_c_deg':2.,'max_chord_error_mm':.1},
                              'simplification':{'geometry_tolerance_mm':.03,'orientation_tolerance_deg':.1},
+                             'orientation':{'initial_orientation_mode':'HOME_ALIGNED_TANGENT'},
                              'z_conversion':{'enabled':False}})
 
     @property

@@ -13,7 +13,7 @@ from .core.conversion import convert, Result
 import asyncio
 
 ROOT = Path(__file__).resolve().parent.parent
-app = FastAPI(title="Concrete CNC XYZC", version="3.6.0")
+app = FastAPI(title="Concrete CNC XYZC", version="3.7.0")
 _results: dict[str, Result] = {}
 
 

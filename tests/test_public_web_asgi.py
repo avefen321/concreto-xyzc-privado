@@ -75,7 +75,7 @@ class PublicWebAsgiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         response = json.loads(body)
         self.assertNotEqual(response['status'], 'FAIL')
-        self.assertEqual(response['report']['backend_version'], '3.6.0')
+        self.assertEqual(response['report']['backend_version'], '3.7.0')
 
 
 if __name__ == '__main__':

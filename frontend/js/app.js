@@ -14,14 +14,14 @@ $('curve-reference-model').onchange=()=>{
     for(const id of ['xyz-decimals','c-decimals','ijk-decimals'])$(id).value=Math.max(number(id),6);
   }
 };
-function config(){return {geometry:{mode:$('geometry-mode').value,max_xy_deviation_mm:number('xy-tolerance')},corner_smoothing:{enabled:$('geometry-mode').value==='SMOOTH_CORNERS',detection_threshold_deg:number('fillet-threshold'),radius_mode:$('radius-mode').value,radius_mm:number('fillet-radius'),max_path_deviation_mm:optional('fillet-deviation'),preferred_radius_nozzle_factor:number('radius-factor'),max_radius_mm:optional('radius-max'),min_segment_remaining_mm:number('fillet-remaining'),max_delta_c_deg:number('max-delta'),max_chord_error_mm:number('fillet-chord-error')},orientation:{alignment_offset_deg:number('alignment'),calibration_offset_deg:number('calibration'),symmetry_period_deg:number('symmetry'),home_aligned_start:$('home-aligned-start').checked},corner_detection:{smooth_turn_max_deg:number('smooth'),sharp_corner_min_deg:number('sharp')},corner_planner:{strategy:$('strategy').value,max_pretransition_mm:number('pretransition'),max_fraction_of_incoming_segment:number('fraction'),allow_c_only_at_sharp_corner:$('allow-c-only').checked},sampling:{max_delta_c_deg:number('max-delta'),max_orientation_interp_error_deg:number('max-error'),max_linear_step_mm:number('max-step')},kinematics:{max_c_velocity_deg_s:optional('max-velocity'),max_c_acceleration_deg_s2:optional('max-acceleration')},serialization:{xyz_decimals:number('xyz-decimals'),c_decimals:number('c-decimals'),feed_decimals:number('f-decimals')}};}
+function config(){return {geometry:{mode:$('geometry-mode').value,max_xy_deviation_mm:number('xy-tolerance')},corner_smoothing:{enabled:$('geometry-mode').value==='SMOOTH_CORNERS',detection_threshold_deg:number('fillet-threshold'),radius_mode:$('radius-mode').value,radius_mm:number('fillet-radius'),max_path_deviation_mm:optional('fillet-deviation'),preferred_radius_nozzle_factor:number('radius-factor'),max_radius_mm:optional('radius-max'),min_segment_remaining_mm:number('fillet-remaining'),max_delta_c_deg:number('max-delta'),max_chord_error_mm:number('fillet-chord-error')},orientation:{alignment_offset_deg:number('alignment'),calibration_offset_deg:number('calibration'),symmetry_period_deg:number('symmetry'),initial_orientation_mode:$('initial-orientation-mode').value,home_axis_deg:number('home-axis-deg'),initial_rotation_speed_deg_s:number('initial-rotation-speed')},corner_detection:{smooth_turn_max_deg:number('smooth'),sharp_corner_min_deg:number('sharp')},corner_planner:{strategy:$('strategy').value,max_pretransition_mm:number('pretransition'),max_fraction_of_incoming_segment:number('fraction'),allow_c_only_at_sharp_corner:$('allow-c-only').checked},sampling:{max_delta_c_deg:number('max-delta'),max_orientation_interp_error_deg:number('max-error'),max_linear_step_mm:number('max-step')},kinematics:{max_c_velocity_deg_s:optional('max-velocity'),max_c_acceleration_deg_s2:optional('max-acceleration')},serialization:{xyz_decimals:number('xyz-decimals'),c_decimals:number('c-decimals'),feed_decimals:number('f-decimals')}};}
 function extendedConfig(){
   const value=config();
   value.simplification={enabled:$('simplify-enabled').checked,geometry_tolerance_mm:number('simplify-geometry'),orientation_tolerance_deg:number('simplify-angle')};
   value.layer_transition={safe_seam:$('safe-seam').checked,corner_guard_mm:number('corner-guard'),alternate_open_paths:$('alternate-open-paths').checked};
   value.process={feed_policy:$('feed-policy').value,experimental_feed_factor:number('feed-factor')};
   value.orientation.mode='alignment';
-  value.nozzle={length_mm:number('nozzle-length')};
+  value.nozzle={length_mm:number('nozzle-length'),width_mm:number('nozzle-width')};
   value.z_conversion={enabled:$('z-enabled').checked,first_layer_z_mm:number('z-first'),subsequent_layer_height_mm:number('z-height')};
   value.sampling.mode='adaptive_global_curves';
   value.sampling.geometry_error_mm=number('simplify-geometry');
@@ -38,6 +38,17 @@ function extendedConfig(){
   return value;
 }
 $('feed-policy').onchange=()=>{$('feed-factor').disabled=$('feed-policy').value!=='ADAPTIVE_EXPERIMENTAL';};
+function updateInitialOrientation(){
+  const automatic=$('initial-orientation-mode').value==='ROTATE_AT_START';
+  $('home-axis-deg').disabled=!automatic;
+  $('initial-rotation-speed').disabled=!automatic;
+  $('initial-orientation-hint').textContent=automatic
+    ?'Homea C=0 paralelo al eje elegido. El equipo llega al primer punto, se detiene, gira únicamente C hasta la orientación calculada y después comienza el recorrido. Como el material se controla manualmente, inícialo después de este giro. G90 sigue significando coordenadas absolutas.'
+    :$('initial-orientation-mode').value==='HOME_ALIGNED_TANGENT'
+      ?'La boquilla debe quedar físicamente orientada como exige el primer tramo antes de ejecutar. No se genera giro inicial. G90 sigue significando coordenadas absolutas.'
+      :'Se conserva la referencia angular absoluta del modelo. Úsala solo si la referencia C física de la máquina ya coincide con ese modelo.';
+}
+$('initial-orientation-mode').onchange=updateInitialOrientation;updateInitialOrientation();
 async function api(path,body){const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw Error(data.detail||`HTTP ${response.status}`);return data;}
 function status(text,kind='neutral'){$('header-status').textContent=text;$('header-status').style.color=kind==='fail'?'#ed8787':kind==='warning'?'#f0b46e':'#75ce96';}
 function escapeHtml(text){return String(text).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
@@ -230,7 +241,13 @@ function renderOptimization(r){
   $('z-report').textContent=`Normalización Z ${z.enabled?'activa':'desactivada'} · Origen: ${z.source_layer_z_values.join(', ')} mm → Destino: ${z.target_layer_z_values.join(', ')} mm · Error de capa máximo ${fmt(z.max_layer_z_error_mm,6)} mm`;
   const m=r.metrics;
   const items=[['MOVIMIENTOS ENTRADA',m.input_motion_count],['MOVIMIENTOS SALIDA',m.output_motion_count],['COMPRESIÓN',fmt(m.compression_ratio,2)+'×'],['FILLETS',m.fillet_count],['ERROR GEOMETRÍA',fmt(r.simplification.max_geometry_error_mm,5)+' mm'],['ERROR ORIENTACIÓN',fmt(m.max_orientation_error_deg,5)+'°'],['ΔC MÁX.',fmt(m.max_delta_c_deg,3)+'°'],['ARCO → POLILÍNEA',fmt(m.max_fillet_polyline_deviation_mm,4)+' mm'],['VÉRTICE → ARCO',fmt(m.max_fillet_vertex_setback_mm,4)+' mm'],['ω C MÁX.',fmt(m.max_omega_c_deg_s,3)+' °/s'],['α C MÁX.',fmt(m.max_alpha_c_deg_s2,3)+' °/s²'],['DRIFT ENTRE CAPAS',fmt(m.max_layer_xy_drift_mm,7)+' mm'],['SAFE SEAM',m.safe_seam_status],['NaN / INFINITY',m.nan_count+' / '+m.infinity_count]];
-  if(r.initial_c_reference)items.push(['INICIO DEL EJE C',r.initial_c_reference.mode==='HOME_ALIGNED_TANGENT'?'C0 · homing manual':'Ángulo absoluto']);
+  if(r.initial_c_reference){
+    const c=r.initial_c_reference;
+    const label=c.mode==='ROTATE_AT_START'
+      ?`${c.home_axis_label} → C ${fmt(c.target_c_deg,2)}° · ${c.status}`
+      :c.mode==='HOME_ALIGNED_TANGENT'?'C0 · home ya orientado':'Ángulo absoluto';
+    items.push(['INICIO DEL EJE C',label]);
+  }
   items.push(['G2 / G3',`${m.output_G2_count} / ${m.output_G3_count}`],['COMPRESIÓN DE MÁQUINA',fmt(m.native_compression_ratio,2)+'×'],
     ['ERROR AJUSTE XY',fmt(r.native_arcs.max_fit_error_mm,6)+' mm'],['ERROR AJUSTE C',fmt(r.native_arcs.max_orientation_fit_error_deg,6)+'°'],
     ['G1 DE RESPALDO',r.native_arcs.fallback_G1_count],['RECORRIDO EN ARCOS',fmt(100*(r.native_arcs.native_arc_length_fraction??0),1)+'%']);
@@ -243,7 +260,10 @@ function renderOptimization(r){
   const openRows=(r.open_path_transitions||[]).map(s=>`<tr><td>${s.layer_id} / ${s.stroke_id}</td><td>${s.status}</td><td>${s.reversed?'INVERTIDO':'CONSERVADO'}</td><td>${s.transition_xy_held?'SÍ':'NO'}</td><td>${escapeHtml(s.reason)}</td></tr>`).join('');
   const openTable=openRows?`<table><thead><tr><th>CAPA / TRAZO ABIERTO</th><th>ESTADO</th><th>SENTIDO</th><th>XY/C FIJOS AL SUBIR</th><th>RAZÓN</th></tr></thead><tbody>${openRows}</tbody></table>`:'';
   const rows=r.feed_plan.primitives.slice(0,40).map(p=>`<tr><td>${p.primitive_id}</td><td>${p.source_line}</td><td>${fmt(p.feed_source,2)}</td><td>${fmt(p.max_feed_by_c_mm_min,2)}</td><td>${fmt(p.recommended_feed_mm_min,2)}</td><td>${escapeHtml(p.reason)}</td></tr>`).join('');
-  $('process-audit').innerHTML=`<div class="message-box">Política: ${r.feed_plan.policy} · ${r.feed_plan.unknown_feed_segments} segmentos sin F conocida. El feed final de cada bloque está en el inspector y CSV.</div><table><thead><tr><th>CAPA / TRAZO</th><th>SEAM</th><th>DISTANCIA A ESQUINA</th><th>RAZÓN</th></tr></thead><tbody>${seams}</tbody></table>${openTable}<details class="fillet-details"><summary>Recomendaciones de feed · primeras ${Math.min(40,r.feed_plan.primitives.length)} primitivas</summary><table><thead><tr><th>PRIMITIVA</th><th>LÍNEA</th><th>F ORIGEN</th><th>F MÁX. POR C</th><th>F RECOMENDADA</th><th>RAZÓN</th></tr></thead><tbody>${rows}</tbody></table></details>`;
+  const initial=r.initial_c_reference;
+  const initialBox=initial?.mode==='ROTATE_AT_START'
+    ?`<div class="message-box"><strong>Orientación inicial:</strong> C0 físico ${escapeHtml(initial.home_axis_label)} · punto ${initial.start_xyz?initial.start_xyz.map(v=>fmt(v,2)).join(', '):'—'} · C ${fmt(initial.start_c_deg,2)}° → ${fmt(initial.target_c_deg,2)}° · ΔC ${fmt(initial.rotation_delta_deg,2)}° · ${initial.required?`giro C-only a ${fmt(initial.rotation_speed_deg_s,2)} °/s con parada exacta`:'ya estaba orientada; sin bloque redundante'} · XYZ fijo: ${initial.xyz_held?'SÍ':'NO'} · antes del recorrido: ${initial.before_deposition?'SÍ':'NO'}. ${initial.material_control==='EXTERNAL_MANUAL'?'Inicia manualmente el material después de esta orientación.':'La activación de proceso se serializa después del giro.'}</div>`:'';
+  $('process-audit').innerHTML=`${initialBox}<div class="message-box">Política: ${r.feed_plan.policy} · ${r.feed_plan.unknown_feed_segments} segmentos sin F conocida. El feed final de cada bloque está en el inspector y CSV.</div><table><thead><tr><th>CAPA / TRAZO</th><th>SEAM</th><th>DISTANCIA A ESQUINA</th><th>RAZÓN</th></tr></thead><tbody>${seams}</tbody></table>${openTable}<details class="fillet-details"><summary>Recomendaciones de feed · primeras ${Math.min(40,r.feed_plan.primitives.length)} primitivas</summary><table><thead><tr><th>PRIMITIVA</th><th>LÍNEA</th><th>F ORIGEN</th><th>F MÁX. POR C</th><th>F RECOMENDADA</th><th>RAZÓN</th></tr></thead><tbody>${rows}</tbody></table></details>`;
 }
 function drawChart(){
   const {ctx,w,h}=resize($('audit-chart'));ctx.fillStyle='#171c1f';ctx.fillRect(0,0,w,h);drawGrid(ctx,w,h);
@@ -269,6 +289,7 @@ $('load-legacy').onclick=async()=>{
     const profile=profiles.legacy;
     profile.z_conversion=state.result.report.config.z_conversion;
     profile.orientation=state.result.report.config.orientation;
+    profile.nozzle=state.result.report.config.nozzle;
     profile.layer_completion=state.result.report.config.layer_completion;
     profile.cordon=state.result.report.config.cordon;
     const result=await api('/api/convert',{source,config:profile});

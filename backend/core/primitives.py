@@ -38,7 +38,10 @@ class MotionPrimitive:
     @property
     def length_mm(self): return math.dist(self.start_xyz,self.end_xyz)
     @property
-    def duration_s(self): return 60*self.length_mm/self.feed if self.feed and self.type!='TRAVEL' else None
+    def duration_s(self):
+        if self.feed and self.type=='C_ONLY':
+            return 60*abs(self.end_c-self.start_c)/self.feed
+        return 60*self.length_mm/self.feed if self.feed and self.type!='TRAVEL' else None
     @property
     def required_c_velocity_deg_s(self): return abs(self.end_c-self.start_c)/self.duration_s if self.duration_s else None
 

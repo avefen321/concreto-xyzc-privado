@@ -1,3 +1,16 @@
+// Nominal nozzle footprint in model millimetres, not deposited material.
+export function nozzleFootprint(sample, profile = {}) {
+  const angle = ((sample.C_deg || 0) - (sample.c_reference_shift_deg || 0)) * Math.PI / 180;
+  const halfLength = (profile.length_mm ?? 35) / 2;
+  const halfWidth = (profile.width_mm ?? 15) / 2;
+  const ux = Math.cos(angle), uy = Math.sin(angle);
+  return [[-1,-1],[1,-1],[1,1],[-1,1]].map(([a,b]) => [
+    sample.X + a * halfLength * ux - b * halfWidth * uy,
+    sample.Y + a * halfLength * uy + b * halfWidth * ux,
+    sample.Z,
+  ]);
+}
+
 // Display timing only. The backend samples and exported motion plan are immutable.
 export function buildPlaybackTrack(samples, startIndex = 0, include = () => true, primitives = []) {
   const entries = [];
@@ -16,10 +29,14 @@ export function buildPlaybackTrack(samples, startIndex = 0, include = () => true
       const rotation = Math.abs(sample.C_deg - from.C_deg);
       const rapid = ['RAPID', 'PREP_RAPID'].includes(sample.motion_type);
       const moving = !reference && (distance > 1e-9 || rotation > 1e-9);
-      const knownFeed = !rapid && distance > 1e-9 && Number.isFinite(sample.feed_mm_min) && sample.feed_mm_min > 0;
+      const cOnly = sample.motion_type === 'C_ONLY' || primitive?.type === 'C_ONLY';
+      const knownLinearFeed = !rapid && distance > 1e-9 && Number.isFinite(sample.feed_mm_min) && sample.feed_mm_min > 0;
+      const knownRotationFeed = cOnly && rotation > 1e-9 && Number.isFinite(sample.feed_mm_min) && sample.feed_mm_min > 0;
+      const knownFeed = knownLinearFeed || knownRotationFeed;
       const estimated = moving && !knownFeed;
-      // Rapids and C-only have no controller duration here: use a marked visual estimate.
-      const duration = !moving ? 0 : knownFeed ? distance * 60 / sample.feed_mm_min : Math.max(.25, distance / 50, rotation / 90);
+      // A pure rotary G94 move uses degrees/minute; linear moves use mm/minute.
+      const duration = !moving ? 0 : knownRotationFeed ? rotation * 60 / sample.feed_mm_min
+        : knownLinearFeed ? distance * 60 / sample.feed_mm_min : Math.max(.25, distance / 50, rotation / 90);
       if (!entries.length) entries.push({index: previousIndex >= startIndex ? previousIndex : index,
         sample: reference ? sample : from, from, duration: 0, startTime: 0, endTime: 0, estimated: false});
       if (sample !== entries[0].sample || entries.length > 1) {
@@ -112,7 +129,10 @@ export function createSimulator(state, fmt) {
     const layer = $('layer-select').value, stroke = $('stroke-select').value;
     const include = s => (layer === 'all' || String(s.layer_id) === layer) &&
                          (stroke === 'all' || String(s.stroke_id) === stroke);
-    const start = $('start-mode').value === 'deposition' ? sim.deposition_start_index : sim.program_start_index;
+    const startMode=$('start-mode').value;
+    const start = startMode==='program' ? sim.program_start_index
+      :startMode==='deposition' ? sim.deposition_start_index
+      :(sim.initial_orientation_start_index ?? sim.deposition_start_index);
     playback = buildPlaybackTrack(sim.samples, start, include, sim.machine_primitives || []);
     playbackCursor = 0;
     $('timeline').max = Math.max(0, playback.entries.length - 1);
@@ -271,16 +291,11 @@ export function createSimulator(state, fmt) {
     ctx.closePath(); ctx.fill();
   }
 
-  function nozzle(ctx, project, sample) {
+  function nozzle(ctx, project, sample, profile) {
     const center = project([sample.X, sample.Y, sample.Z]);
-    const long = vectorAt(project, sample, sample.C_deg || 0, 18);
-    const wide = vectorAt(project, sample, (sample.C_deg || 0) + 90, 6);
-    const corners = [
-      [center[0] - long[0] - wide[0], center[1] - long[1] - wide[1]],
-      [center[0] + long[0] - wide[0], center[1] + long[1] - wide[1]],
-      [center[0] + long[0] + wide[0], center[1] + long[1] + wide[1]],
-      [center[0] - long[0] + wide[0], center[1] - long[1] + wide[1]],
-    ];
+    const physicalC=(sample.C_deg || 0)-(sample.c_reference_shift_deg || 0);
+    const long = vectorAt(project, sample, physicalC, 18);
+    const corners = nozzleFootprint(sample, profile).map(project);
     if($('show-nozzle').checked){
     ctx.beginPath();
     corners.forEach((p, i) => i ? ctx.lineTo(...p) : ctx.moveTo(...p));
@@ -396,7 +411,7 @@ export function createSimulator(state, fmt) {
     if (current) {
       if (compare !== 'original' && head.entry.duration > 0)
         drawPath(ctx, head.entry.primitive ? primitivePoints(head.entry.primitive,head.fraction) : [[head.entry.from.X,head.entry.from.Y,head.entry.from.Z], [head.pose.X,head.pose.Y,head.pose.Z]], project, '#8ce0c0', 4, !current.deposition_active);
-      if (include(current)) nozzle(ctx, project, head.pose);
+      if (include(current)) nozzle(ctx, project, head.pose, sim.audit?.config?.nozzle);
       $('sample-id').value=current.sample_id;
       const f=sim.fillets.find(f=>f.stroke_id===current.stroke_id&&f.id===current.fillet_id);
       $('corner-detail').textContent=f?`Corner #${f.id} · Capa ${f.layer_id} · Giro ${fmt(f.turn_angle_deg)}° · R elegido ${fmt(f.radius_mm)} mm / preferido ${fmt(f.radius_preferred_mm)} / máximo ${fmt(f.radius_max_feasible_mm)}

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 
-BACKEND_VERSION='3.6.0'
+BACKEND_VERSION='3.7.0'
 
 
 def digest(value):

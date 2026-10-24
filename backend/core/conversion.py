@@ -87,6 +87,7 @@ class Sample:
     cordon_role: str | None = None
     display_only: bool = False
     curve_certified: bool = False
+    c_motion_start_deg: float | None = None
 
     def to_dict(self):
         return asdict(self)
@@ -324,6 +325,15 @@ def _kinematics(samples: list[Sample], config: Config):
     unknown = 0
     for sample in samples:
         sample.omega_C_deg_s = sample.alpha_C_deg_s2 = sample.duration_s = None
+        if (sample.generated_reason == 'INITIAL_C_ALIGNMENT' and
+                sample.c_motion_start_deg is not None):
+            sample.delta_C_deg = sample.C_deg - sample.c_motion_start_deg
+            if sample.feed_mm_min and abs(sample.delta_C_deg) > 1e-12:
+                sample.duration_s = 60 * abs(sample.delta_C_deg) / sample.feed_mm_min
+                sample.omega_C_deg_s = sample.delta_C_deg / sample.duration_s
+                max_omega = max(max_omega, abs(sample.omega_C_deg_s))
+                known += 1
+            continue
         if sample.stroke_id is None:
             continue
         prior = prev_by_stroke.get(sample.stroke_id)
@@ -393,11 +403,16 @@ def _serialize(blocks, motions: list[Motion], plan: FinalMotionPlan, config: Con
         out=_fixed_decimal(value,config.serialization.feed_decimals)
         if float(out)<=0: raise ValueError('F redondeada a cero; aumente decimales F en Salida')
         return out
-    def emit(sample):
+    def emit(sample, restore_path_mode='G64'):
+        initial_alignment = sample.generated_reason == 'INITIAL_C_ALIGNMENT'
+        if initial_alignment:
+            add('G61.1', source_line=sample.source_line, reason='INITIAL_C_EXACT_STOP')
         command='G0' if sample.motion_type in ('RAPID','PREP_RAPID') else 'G1'
         if sample.motion_type=='C_ONLY':
             text=f'G1 C{angle(sample.C_deg)}'
-            if config.kinematics.max_c_velocity_deg_s:
+            if initial_alignment and sample.feed_mm_min is not None:
+                text+=' F'+feed(sample.feed_mm_min)
+            elif config.kinematics.max_c_velocity_deg_s:
                 text+=' F'+feed(60*config.kinematics.max_c_velocity_deg_s)
             elif sample.feed_mm_min is not None:
                 text+=' F'+feed(sample.feed_mm_min)
@@ -422,7 +437,13 @@ def _serialize(blocks, motions: list[Motion], plan: FinalMotionPlan, config: Con
             if sample.E is not None and not geometry_only: text+=' E'+coordinate(sample.E)
             if sample.feed_mm_min is not None and command=='G1': text+=' F'+feed(sample.feed_mm_min)
         add(text,sample=sample)
+        if initial_alignment:
+            add(restore_path_mode, source_line=sample.source_line, reason='INITIAL_C_RESTORE_PATH_MODE')
     unit=1.; e_absolute=True; e_position=0.; e_offset=0.
+    configured_path_mode = ('G64'+(f' P{config.linuxcnc.blend_tolerance_mm:g}'
+                            if config.linuxcnc.blend_tolerance_mm is not None else '')
+                            if config.linuxcnc.path_mode=='G64' else None)
+    active_path_mode = configured_path_mode or 'G64'
     for block in blocks:
         g=[v for k,v in block.words if k=='G']
         m=[v for k,v in block.words if k=='M']
@@ -435,8 +456,20 @@ def _serialize(blocks, motions: list[Motion], plan: FinalMotionPlan, config: Con
             if 92 in g: e_offset=e_position-e*unit
             else: e_position=e*unit+e_offset if e_absolute else e_position+e*unit
         members=by_line.get(block.line,[])
-        prep_end=max((i+1 for i,s in enumerate(members) if s.motion_type=='PREP_RAPID'),default=0) if any(code in (3,4) for code in m) else 0
-        for sample in members[:prep_end]: emit(sample)
+        source_path_codes=[code for code in g if code in (61,61.1,64)]
+        block_path_mode=None
+        if source_path_codes:
+            selected=source_path_codes[-1]
+            block_path_mode=f'G{selected:g}'
+            if selected==64:
+                p,q=block.value('P'),block.value('Q')
+                if p is not None: block_path_mode+=f' P{p:g}'
+                if q is not None: block_path_mode+=f' Q{q:g}'
+        restore_path_mode=configured_path_mode or block_path_mode or active_path_mode
+        prep_end=max((i+1 for i,s in enumerate(members)
+                      if s.motion_type=='PREP_RAPID' or s.generated_reason=='INITIAL_C_ALIGNMENT'),
+                     default=0) if any(code in (3,4) for code in m) else 0
+        for sample in members[:prep_end]: emit(sample,restore_path_mode)
         if 92 in g: add(f'(source G92 line {block.line}: resolved absolute coordinates)',block.line)
         passthrough=[]; terminal=[]
         for k,v in block.words:
@@ -460,7 +493,9 @@ def _serialize(blocks, motions: list[Motion], plan: FinalMotionPlan, config: Con
         if passthrough: add(' '.join(passthrough),block.line)
         if config.serialization.preserve_comments:
             for comment in block.comments: add(comment,block.line,reason='COMMENT')
-        for sample in members[prep_end:]: emit(sample)
+        for sample in members[prep_end:]: emit(sample,restore_path_mode)
+        if configured_path_mode is None and block_path_mode is not None:
+            active_path_mode=block_path_mode
         if (not members and block.value('F') is not None and not any(block.value(k) is not None for k in 'XYZ')
                 and not any(gv in (2,3) for gv in g)):
             add('F'+feed(block.value('F')*unit),block.line,reason='NORMALIZED_FEED')
@@ -540,8 +575,16 @@ def convert(source: str, config: Config | None = None) -> Result:
     fillet_by_id = {}
     samples: list[Sample] = []
     s_global = 0.0
-    previous_c = None
-    c_reference_shift = 0.0
+    initial_orientation_mode = config.orientation.initial_orientation_mode
+    fixed_axis_start = initial_orientation_mode == 'ROTATE_AT_START'
+    previous_c = 0.0 if fixed_axis_start else None
+    c_reference_shift = -config.orientation.home_axis_deg if fixed_axis_start else 0.0
+    initial_alignment_sample = None
+    initial_alignment_start_c = None
+    initial_alignment_target_c = None
+    initial_alignment_xyz = None
+    initial_alignment_activation_line = None
+    initial_alignment_unsafe_activation = False
     safe_seams=[]
     feed_rows=[]
     execution_order={}
@@ -568,7 +611,12 @@ def convert(source: str, config: Config | None = None) -> Result:
         optimized, fillets = optimize_stroke(stroke, config, preserve_cordon_seam)
         optimized, seam_report = plan_seam(optimized,fillets,seam_config)
         reference_point_counts[stroke.id]=len(optimized.points)
-        optimized,fit_decisions=fit_stroke(optimized,config,previous_c)
+        # Curve reconstruction depends on relative orientation change, not on
+        # the machine's startup reference.  Preserve the established first-
+        # stroke reference for fitting; apply the fixed-axis C0 only when the
+        # final machine field is built below.
+        fit_previous_c=(None if fixed_axis_start and not fields else previous_c)
+        optimized,fit_decisions=fit_stroke(optimized,config,fit_previous_c)
         arc_fit_decisions.extend(fit_decisions)
         if stroke.deposition:
             safe_seams.append(seam_report)
@@ -586,8 +634,10 @@ def convert(source: str, config: Config | None = None) -> Result:
         for preceding in motions[last_print_motion_index:int(stroke.points[0].motion_index)]:
             if preceding.block.value('C') is not None: previous_c=preceding.c_end
         incoming_c=previous_c
+        first_print_stroke=not fields
         field = Field(optimized, config, previous_c,
-                      home_reference=(previous_c is None and config.orientation.home_aligned_start),
+                      home_reference=(first_print_stroke and previous_c is None and
+                                      initial_orientation_mode == 'HOME_ALIGNED_TANGENT'),
                       reference_shift_deg=c_reference_shift)
         c_reference_shift=field.reference_shift_deg
         planned_feeds, recommendations = plan_field(field,config)
@@ -611,29 +661,64 @@ def convert(source: str, config: Config | None = None) -> Result:
                               'START', True, generated_by_fillet=bool(start_fillet),
                               fillet_id=start.fillet_id, original_X=original_start[0],
                               original_Y=original_start[1], original_Z=original_start[2], emit=False))
+        activation = None
+        for block in blocks:
+            if block.line > stroke.points[0].line:
+                break
+            for letter, value in block.words:
+                if letter == 'M' and value in (3, 4): activation = block.line
+                elif letter == 'M' and value == 5: activation = None
+        prep_line = activation or stroke.points[0].line
+        if activation and any(m.deposition and activation<m.line<stroke.points[0].line for m in motions):
+            prep_line=stroke.points[0].line
+        needs_initial_alignment = first_print_stroke and fixed_axis_start
+        if needs_initial_alignment:
+            initial_alignment_start_c = incoming_c if incoming_c is not None else 0.0
+            initial_alignment_target_c = field.point_c[0]
+            initial_alignment_xyz = start.xyz
+            initial_alignment_activation_line = activation
+            initial_alignment_unsafe_activation = bool(
+                activation and any(
+                    activation <= m.line < stroke.points[0].line and
+                    (m.kind == 'RAPID' or not m.deposition) and
+                    math.dist(m.start, m.end) > config.geometry.zero_length_tolerance_mm
+                    for m in motions))
+            if initial_alignment_unsafe_activation and not config.serialization.motion_only:
+                raise ValueError(
+                    'La activación M3/M4 ocurre antes del recorrido de aproximación. '
+                    'Mueva M3/M4 después de llegar al punto inicial o use salida solo movimiento; '
+                    'no es seguro orientar C con el proceso activo.')
         orient_after_cordon=(cordon_report['status'] in ('ADDED','ADJUSTED','KEPT') and len(fields)==2 and
                              incoming_c is not None and abs(incoming_c-field.point_c[0])>config.precision.angle_epsilon_deg)
         orient_stroke_start=(native_enabled(config) and abs((incoming_c or 0.)-field.point_c[0])>config.precision.angle_epsilon_deg)
+        if needs_initial_alignment:
+            orient_stroke_start=False
         if (xy_length(stroke.points[0].xyz, start.xyz) > config.geometry.zero_length_tolerance_mm or orient_after_cordon or orient_stroke_start or
                 (len(fields)==1 and stroke.layer_id==1 and config.z_conversion.enabled and
                  abs(z_report['source_layer_z_values'][0]-start.xyz[2])>config.z_conversion.z_match_tolerance_mm)):
-            activation = None
-            for block in blocks:
-                if block.line > stroke.points[0].line:
-                    break
-                for letter, value in block.words:
-                    if letter == 'M' and value in (3, 4): activation = block.line
-                    elif letter == 'M' and value == 5: activation = None
-            prep_line = activation or stroke.points[0].line
             if orient_after_cordon:
                 prep_line = stroke.points[0].line
-            if activation and any(m.deposition and activation<m.line<stroke.points[0].line for m in motions):
-                prep_line=stroke.points[0].line
+            prep_c=(initial_alignment_start_c if needs_initial_alignment
+                    else field.point_c[0])
             samples.append(Sample(len(samples) + 1, None, None, prep_line,
                                   start.motion_index - 0.5, None, -1, s_global, 0, *start.xyz,
-                                  None, None, field.point_c[0], 0, 0, start.feed, None, None,
+                                  None, None, prep_c, 0, 0, start.feed, None, None,
                                   False, None, 'PREP_RAPID', False))
             if orient_after_cordon: samples[-1].generated_reason='CORDON_ORIENTATION'
+        if (needs_initial_alignment and
+                abs(initial_alignment_target_c-initial_alignment_start_c) > config.precision.angle_epsilon_deg):
+            rotation_speed=config.orientation.initial_rotation_speed_deg_s
+            if config.kinematics.max_c_velocity_deg_s is not None:
+                rotation_speed=min(rotation_speed,config.kinematics.max_c_velocity_deg_s)
+            samples.append(Sample(
+                len(samples) + 1, stroke.layer_id, stroke.id, prep_line,
+                start.motion_index - 0.25, None, 0, s_global, 0, *start.xyz,
+                field.seg_heading[0], field.point_heading[0], initial_alignment_target_c,
+                initial_alignment_target_c-initial_alignment_start_c, 0,
+                60*rotation_speed, None, None, False, None, 'C_ONLY', False,
+                generated_reason='INITIAL_C_ALIGNMENT', primitive_type='C_ONLY',
+                c_motion_start_deg=initial_alignment_start_c))
+            initial_alignment_sample=samples[-1]
         count = 0
         sampler_input+=reference_point_counts[stroke.id]
         adaptive_rows={}
@@ -701,7 +786,10 @@ def convert(source: str, config: Config | None = None) -> Result:
                     samples[-1].field_segment=i
         for rank,sample in enumerate(samples[stroke_sample_start:]):
             sample.c_reference_shift_deg=field.reference_shift_deg
-            execution_order[id(sample)]=(stroke.points[1].motion_index-0.5 if sample.motion_type=='PREP_RAPID' else stroke.points[1].motion_index,rank)
+            execution_order[id(sample)]=(stroke.points[1].motion_index-0.5
+                                         if sample.motion_type=='PREP_RAPID' or
+                                         sample.generated_reason=='INITIAL_C_ALIGNMENT'
+                                         else stroke.points[1].motion_index,rank)
             if optimized.seam_reindexed and sample.deposition_active:
                 sample.anchor_line=stroke.points[1].line
             if sample.feed_source is None: sample.feed_source=sample.feed_mm_min
@@ -922,7 +1010,50 @@ def convert(source: str, config: Config | None = None) -> Result:
               "deposition": motion.deposition, "layer": motion.layer_id, "stroke": motion.stroke_id,
               "is_travel": not motion.deposition or motion.kind == 'RAPID',
               "is_z_only": motion.kind == 'Z_ONLY'} for i, motion in enumerate(motions[:30])]
-    report = {"version": "3.1", "backend_version":BACKEND_VERSION,"input_hash":input_hash,
+    first_print_sample=next((s for s in samples if s.deposition_active),None)
+    axis_labels={0:'+X',90:'+Y',180:'-X',-90:'-Y'}
+    first_field=next(iter(fields.values()),None)
+    effective_reference_shift=first_field.reference_shift_deg if first_field else 0.0
+    initial_reference={
+        "mode":initial_orientation_mode,
+        "manual_alignment_required":initial_orientation_mode=='HOME_ALIGNED_TANGENT',
+        "first_print_c_deg":first_print_sample.C_deg if first_print_sample else None,
+        "reference_shift_deg":effective_reference_shift,
+        "home_axis_deg":config.orientation.home_axis_deg if fixed_axis_start else None,
+        "home_axis_label":axis_labels.get(config.orientation.home_axis_deg) if fixed_axis_start else None,
+        "start_xyz":list(initial_alignment_xyz) if initial_alignment_xyz is not None else None,
+        "start_c_deg":initial_alignment_start_c,
+        "target_c_deg":initial_alignment_target_c,
+        "rotation_delta_deg":(initial_alignment_target_c-initial_alignment_start_c
+                              if initial_alignment_target_c is not None and
+                              initial_alignment_start_c is not None else None),
+        "world_orientation_deg":(initial_alignment_target_c-effective_reference_shift
+                                  if initial_alignment_target_c is not None else None),
+        "rotation_speed_deg_s":((initial_alignment_sample.feed_mm_min/60
+                                 if initial_alignment_sample is not None else
+                                 min(config.orientation.initial_rotation_speed_deg_s,
+                                     config.kinematics.max_c_velocity_deg_s)
+                                 if fixed_axis_start and config.kinematics.max_c_velocity_deg_s is not None
+                                 else config.orientation.initial_rotation_speed_deg_s)
+                                if fixed_axis_start else None),
+        "rotation_feed_deg_min":(initial_alignment_sample.feed_mm_min
+                                 if initial_alignment_sample is not None else None),
+        "sample_id":initial_alignment_sample.sample_id if initial_alignment_sample is not None else None,
+        "required":initial_alignment_sample is not None,
+        "status":('GENERATED' if initial_alignment_sample is not None else
+                  'ALREADY_ALIGNED' if fixed_axis_start and first_print_sample is not None else
+                  'NOT_APPLICABLE'),
+        "xyz_held":True if fixed_axis_start and first_print_sample is not None else None,
+        "before_deposition":(initial_alignment_sample.sample_id < first_print_sample.sample_id
+                             if initial_alignment_sample is not None and first_print_sample is not None
+                             else True if fixed_axis_start and first_print_sample is not None else None),
+        "deposition_active":False if fixed_axis_start and first_print_sample is not None else None,
+        "exact_stop_enforced":initial_alignment_sample is not None,
+        "source_activation_line":initial_alignment_activation_line,
+        "source_activation_before_approach":initial_alignment_unsafe_activation,
+        "material_control":('EXTERNAL_MANUAL' if config.serialization.motion_only
+                            else 'SOURCE_PROCESS_COMMANDS')}
+    report = {"version": "3.2", "backend_version":BACKEND_VERSION,"input_hash":input_hash,
               "config_hash":config_hash,"conversion_id":conversion_id,"config":config.to_dict(),
               "z_conversion":z_report,"curve_spans":curve_spans,"density":density_report,
               "layer_completion":closure_report,
@@ -930,12 +1061,7 @@ def convert(source: str, config: Config | None = None) -> Result:
               "cordon":cordon_report,
               "linuxcnc":{'policy':config.linuxcnc.path_mode,'source_modes':path_modes,'machine_mode_verified':False},
               "safe_seams":safe_seams,"simplification":simplification_report,
-              "initial_c_reference":{
-                  "mode":"HOME_ALIGNED_TANGENT" if config.orientation.home_aligned_start else "ABSOLUTE_MODEL",
-                  "manual_alignment_required":config.orientation.home_aligned_start,
-                  "first_print_c_deg":next((s.C_deg for s in samples if s.deposition_active),None),
-                  "reference_shift_deg":next((f.reference_shift_deg for f in fields.values()
-                                               if abs(f.reference_shift_deg)>config.precision.angle_epsilon_deg),0.0)},
+              "initial_c_reference":initial_reference,
               "feed_plan":{'policy':config.process.feed_policy,'primitives':feed_rows,
                            'unknown_feed_segments':sum(row['feed_source'] is None for row in feed_rows),
                            'final_feeds':[{'sample_id':s.sample_id,'source':s.feed_source,'planned':s.feed_mm_min,'recommended':s.feed_recommended} for s in samples if s.deposition_active]},
@@ -1064,6 +1190,10 @@ def convert(source: str, config: Config | None = None) -> Result:
                   "visualization_stride": 1,
                   "full_sample_count": len(samples),
                   "program_start_index": 0,
+                  "initial_orientation_start_index": next((i for i, s in enumerate(display_samples)
+                                                            if s.generated_reason=='INITIAL_C_ALIGNMENT'),
+                                                           next((i for i, s in enumerate(display_samples)
+                                                                 if s.deposition_active), 0)),
                   "deposition_start_index": next((i for i, s in enumerate(display_samples)
                                                   if s.deposition_active), 0),
                   "original_strokes": design_strokes,
@@ -1087,7 +1217,7 @@ def convert(source: str, config: Config | None = None) -> Result:
                 if s.emit and previous_emitted and s.motion_type!='START': current['points'].append(list(previous_emitted))
             current['points'].append([s.X,s.Y,s.Z]); current['sample_ids'].append(s.sample_id)
         if s.emit: previous_emitted=(s.X,s.Y,s.Z)
-    simulation.update(schema_version='3.1',conversion_id=conversion_id,input_hash=input_hash,config_hash=config_hash,
+    simulation.update(schema_version='3.2',conversion_id=conversion_id,input_hash=input_hash,config_hash=config_hash,
                       backend_version=BACKEND_VERSION,design_path=simulation['original_strokes'],
                       printable_path=simulation['optimized_strokes'],classified_geometry=classifications,
                       layers=layer_report,layer_transitions=layer_transitions,safe_seams=safe_seams,

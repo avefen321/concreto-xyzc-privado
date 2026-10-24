@@ -55,7 +55,7 @@ class PrivateWebTests(unittest.TestCase):
                     'config': {'cordon': {'mode': 'omit'}}})
                 self.assertEqual(converted.status_code, 200)
                 self.assertNotEqual(converted.json()['status'], 'FAIL')
-                self.assertEqual(converted.json()['report']['backend_version'], '3.6.0')
+                self.assertEqual(converted.json()['report']['backend_version'], '3.7.0')
 
     def test_every_application_surface_requires_authentication(self):
         for path in ('/', '/css/app.css', '/js/app.js', '/examples/contorno_organico.ngc',
