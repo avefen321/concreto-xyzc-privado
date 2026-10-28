@@ -3,6 +3,13 @@ import math
 from .gcode import parse, interpret, arc_geometry
 
 
+def _declared_initial_xyz(objects,config):
+    if config.initial_xy_approach.enabled:
+        approach=next((p for p in objects if p.generated_reason=='INITIAL_XY_APPROACH'),None)
+        if approach is not None: return (0.,0.,approach.Z)
+    return None
+
+
 class SyntaxValidator:
     name='Syntax'
     @staticmethod
@@ -21,7 +28,7 @@ class SerializationValidator:
         if [s.sample_id for s in emitted]!=[r['sample_id'] for r in rows]:
             errors.append('El orden serializado difiere del FinalMotionPlan')
         blocks=parse(gcode)
-        roundtrip,_=interpret(blocks)
+        roundtrip,_=interpret(blocks,initial_xyz=_declared_initial_xyz(samples,config))
         motion_by_line={motion.line:motion for motion in roundtrip}
         by_id={s.sample_id:s for s in emitted}
         for row in rows:
@@ -33,7 +40,12 @@ class SerializationValidator:
             if s.motion_type!='C_ONLY':
                 # Compare the modal endpoint reconstructed by the interpreter.
                 # Full I/J circles intentionally omit X and Y in LinuxCNC.
-                max_xyz=max(max_xyz,math.dist((s.X,s.Y,s.Z),motion.end))
+                if s.generated_reason=='INITIAL_XY_APPROACH':
+                    # Its Z is deliberately inherited from the machine's
+                    # prepositioned state, which a standalone parser cannot know.
+                    max_xyz=max(max_xyz,math.hypot(s.X-motion.end[0],s.Y-motion.end[1]))
+                else:
+                    max_xyz=max(max_xyz,math.dist((s.X,s.Y,s.Z),motion.end))
             max_c=max(max_c,abs(motion.c_end-s.C_deg))
             if b.value('F') is not None and s.feed_mm_min is not None:
                 max_f=max(max_f,abs(b.value('F')-s.feed_mm_min))
@@ -53,7 +65,7 @@ class NativeArcValidator:
     def check(gcode,primitives,config):
         errors=[]; count=0; center_error=radius_error=sweep_error=c_error=0.; reconstructed_pose_error=0.
         try:
-            motions,_=interpret(parse(gcode))
+            motions,_=interpret(parse(gcode),initial_xyz=_declared_initial_xyz(primitives,config))
             expected=list(primitives)
             if len(motions)!=len(expected): errors.append('Round-trip: cantidad de movimientos diferente')
             for m,p in zip(motions,expected):

@@ -74,7 +74,7 @@ class ReconstructionFitter:
             for point in (split_controls(p,.5)[0][-1],p[-1]):
                 phi=math.atan2(point[1]-arc.center[1],point[0]-arc.center[0])
                 phase+=math.radians(wrap180(math.degrees(phi-previous))); previous=phi
-        if abs(phase-arc.sweep)>1e-7: return fail('POINT_ORDER')
+        if abs(phase-arc.sweep)>getattr(self,'phase_tolerance',1e-7): return fail('POINT_ORDER')
         start_error=abs(wrap180(arc.heading-self.ref.heading(arc.sa)))
         end_error=abs(wrap180(arc.heading+math.degrees(arc.sweep)-self.ref.heading(arc.sb)))
         if max(start_error,end_error)>self.angle+1e-8: return fail('TANGENT_ERROR')
@@ -117,8 +117,10 @@ class ReconstructionFitter:
             if self.validate_arc(first)[0] and self.validate_arc(second)[0]: return [first,second]
         return []
 
-    def line_orientation_bound(self,a,b,start,end):
-        ref=self.ref; h0=ref.heading(a); change=ref.heading(b)-h0
+    def line_orientation_bound(self,a,b,start,end,heading_start=None,heading_end=None):
+        ref=self.ref
+        h0=ref.heading(a) if heading_start is None else heading_start
+        change=(ref.heading(b) if heading_end is None else heading_end)-h0
         chord=(end[0]-start[0],end[1]-start[1]); length2=sum(x*x for x in chord)
         if length2<1e-18: return None
         maximum=0.
@@ -230,7 +232,7 @@ class ReconstructionFitter:
         return left+right[1:]
 
 
-def reconstruct_stroke(stroke,config,previous_c=None):
+def reconstruct_stroke(stroke,config,previous_c=None,representation=None):
     field=Field(stroke,config,previous_c); n=len(stroke.points)-1; eligible=[]
     for i,(a,b) in enumerate(zip(stroke.points,stroke.points[1:])):
         eligible.append(not (a.locked or b.locked or a.arc_center is not None or b.arc_center is not None or
@@ -242,15 +244,26 @@ def reconstruct_stroke(stroke,config,previous_c=None):
         """Keep a singular subspan in G1 without discarding its smooth neighbours."""
         try:
             reference=ParametricReference(stroke,field,start,end,geometry*config.arc_fit.reconstruction_budget_fraction)
+            reference_id=None
+            if representation is not None:
+                reference,reference_id=representation.reference(reference,stroke,start,end)
             fitter=ReconstructionFitter(reference,config); part=[]
             cuts=reference.cuts()
             for a,b in zip(cuts,cuts[1:]):
-                interval=fitter.fit(a,b)
+                interval=(representation.fit(fitter,a,b,reference_id)
+                          if representation is not None else fitter.fit(a,b))
                 if part:
                     part[-1]=replace(part[-1],heading_override_deg=interval[0].heading_override_deg)
                     part.extend(interval[1:])
                 else: part.extend(interval)
+            for left,right in zip(part,part[1:]):
+                length=(abs(math.radians(right.arc_sweep_deg))*right.arc_radius
+                        if right.arc_center is not None else math.dist(left.xyz[:2],right.xyz[:2]))
+                if length<=config.geometry.zero_length_tolerance_mm:
+                    raise ValueError('DEGENERATE_PARAMETRIC_CANDIDATE: se conserva el tramo original')
             arcs=sum(p.arc_center is not None for p in part[1:])
+            if representation is not None:
+                representation.accept(reference_id,part)
             reasons={}
             for p in part[1:]:
                 if p.arc_center is None:
@@ -300,6 +313,7 @@ def reconstruct_stroke(stroke,config,previous_c=None):
         if abs(wrap180(final.point_c[i]-start))>1e-5:
             logs.append({'span_id':f'{stroke.id}:FINAL_C','classification':'PARAMETRIC_CURVE','source_point_count':n+1,
                          'split_reason':'ARC_JOIN_TANGENT_DISCONTINUITY','output':'G1_FALLBACK',
-                         'primitive_count':n,'max_error':None,'reference_model':MODEL})
+                         'primitive_count':n,'max_error':None,'reference_model':MODEL,
+                         'point_index':i,'actual_c':final.point_c[i],'candidate_c':start})
             return stroke,logs
     return fitted,logs

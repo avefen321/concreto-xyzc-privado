@@ -82,8 +82,10 @@ def parse(text: str) -> list[Block]:
     return blocks
 
 
-def interpret(blocks: list[Block]) -> tuple[list[Motion], list[str]]:
-    xyz = [0.0, 0.0, 0.0]
+def interpret(blocks: list[Block], *, initial_xyz=None) -> tuple[list[Motion], list[str]]:
+    xyz = list(initial_xyz) if initial_xyz is not None else [0.0, 0.0, 0.0]
+    if len(xyz)!=3 or not all(math.isfinite(v) for v in xyz):
+        raise ValueError('Estado XYZ inicial inválido')
     offset = [0.0, 0.0, 0.0]
     e_position = 0.0
     e_offset = 0.0

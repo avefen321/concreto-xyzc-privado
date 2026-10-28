@@ -10,6 +10,17 @@ class Geometry:
 
 
 @dataclass
+class XYBoundaryOffset:
+    enabled: bool = False
+    margin_mm: float = 20.0
+
+
+@dataclass
+class InitialXYApproach:
+    enabled: bool = False
+
+
+@dataclass
 class Layers:
     z_change_tolerance_mm: float = 0.001
 
@@ -111,6 +122,7 @@ class LinuxCNC:
 class LayerTransition:
     safe_seam: bool = False
     corner_guard_mm: float = 20.0
+    preferred_corner_guard_mm: float = 20.0
     alternate_open_paths: bool = False
 
 
@@ -225,6 +237,8 @@ class Config:
     z_conversion: ZConversion = field(default_factory=ZConversion)
     linuxcnc: LinuxCNC = field(default_factory=LinuxCNC)
     geometry: Geometry = field(default_factory=Geometry)
+    xy_boundary_offset: XYBoundaryOffset = field(default_factory=XYBoundaryOffset)
+    initial_xy_approach: InitialXYApproach = field(default_factory=InitialXYApproach)
     layers: Layers = field(default_factory=Layers)
     orientation: Orientation = field(default_factory=Orientation)
     corner_detection: CornerDetection = field(default_factory=CornerDetection)
@@ -291,6 +305,8 @@ class Config:
         positive.extend([(name, value) for name, value in (
             ('geometry.max_xy_deviation_mm', self.geometry.max_xy_deviation_mm),
             ('geometry.zero_length_tolerance_mm', self.geometry.zero_length_tolerance_mm),
+            ('xy_boundary_offset.margin_mm', self.xy_boundary_offset.margin_mm),
+            ('layer_transition.preferred_corner_guard_mm', self.layer_transition.preferred_corner_guard_mm),
             ('simplification.geometry_tolerance_mm', self.simplification.geometry_tolerance_mm),
             ('simplification.orientation_tolerance_deg', self.simplification.orientation_tolerance_deg),
             ('precision.geometry_epsilon', self.precision.geometry_epsilon),
@@ -349,6 +365,10 @@ class Config:
             raise ValueError("Estrategia de esquina inválida")
         if self.geometry.mode not in ("PRESERVE_PATH", "SMOOTH_CORNERS"):
             raise ValueError("Modo de geometría inválido")
+        if type(self.xy_boundary_offset.enabled) is not bool:
+            raise ValueError('xy_boundary_offset.enabled debe ser booleano')
+        if type(self.initial_xy_approach.enabled) is not bool:
+            raise ValueError('initial_xy_approach.enabled debe ser booleano')
         if self.corner_smoothing.radius_mode not in ('fixed','adaptive'):
             raise ValueError('radius_mode debe ser fixed o adaptive')
         if self.sampling.mode not in ('adaptive_global_curves','legacy'):

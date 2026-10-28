@@ -1,4 +1,5 @@
-import {createSimulator} from './simulation.js';
+import {createSimulator} from './simulation.js?v=2.2';
+import {setupOptimization} from './optimization.js?v=2.2';
 const $ = id => document.getElementById(id);
 const state = {file:null, source:'', parsed:null, result:null, simulation:null, page:'archivo', view:'2d', playing:false, timer:null, busy:false};
 const nav = [...document.querySelectorAll('#navigation button')];
@@ -18,11 +19,13 @@ function config(){return {geometry:{mode:$('geometry-mode').value,max_xy_deviati
 function extendedConfig(){
   const value=config();
   value.simplification={enabled:$('simplify-enabled').checked,geometry_tolerance_mm:number('simplify-geometry'),orientation_tolerance_deg:number('simplify-angle')};
-  value.layer_transition={safe_seam:$('safe-seam').checked,corner_guard_mm:number('corner-guard'),alternate_open_paths:$('alternate-open-paths').checked};
+  value.layer_transition={safe_seam:$('safe-seam').checked,corner_guard_mm:number('corner-guard'),preferred_corner_guard_mm:number('corner-guard-preferred'),alternate_open_paths:$('alternate-open-paths').checked};
   value.process={feed_policy:$('feed-policy').value,experimental_feed_factor:number('feed-factor')};
   value.orientation.mode='alignment';
   value.nozzle={length_mm:number('nozzle-length'),width_mm:number('nozzle-width')};
   value.z_conversion={enabled:$('z-enabled').checked,first_layer_z_mm:number('z-first'),subsequent_layer_height_mm:number('z-height')};
+  value.xy_boundary_offset={enabled:$('xy-boundary-offset-enabled').checked,margin_mm:20};
+  value.initial_xy_approach={enabled:$('initial-xy-approach-enabled').checked};
   value.sampling.mode='adaptive_global_curves';
   value.sampling.geometry_error_mm=number('simplify-geometry');
   value.sampling.preferred_min_block_length_mm=number('micro-length');
@@ -75,7 +78,7 @@ function reviewDecisions(review){
   $('cordon-omit').disabled=!cordon.can_omit;
   $('cordon-keep').textContent=cordon.can_keep&&!cordon.can_add?'Mantener recorrido':'Mantener cordón';
   $('cordon-details').innerHTML=`<div><small>INICIO DE LA FIGURA</small><strong>${seam?seam.slice(0,2).map(v=>fmt(v,1)).join(', '):'—'}</strong></div><div><small>TRAMO DE ENTRADA ACTUAL</small><strong>${cordon.existing?`${fmt(cordon.existing_length_mm,1)} mm · cordón`:cordon.source_entry_length_mm?`${fmt(cordon.source_entry_length_mm,1)} mm · aproximación`:'No detectado'}</strong></div><div class="seam">${start?`Nuevo cordón: ${fmt(cordon.length_mm,0)} mm a 45° desde X ${fmt(start[0],2)}, Y ${fmt(start[1],2)} (${cordon.preview_direction}) hasta el inicio. Un G0 llega al punto del cordón; el G1 recorre los 65 mm mientras alimentas la mezcla manualmente.`:escapeHtml(cordon.reason)}</div>`;
-  $('cordon-warning').textContent=!cordon.can_add?cordon.reason:cordon.negative_xy?`El punto propuesto tiene X o Y negativos. Comprueba que tu máquina alcance X ${fmt(start[0],2)}, Y ${fmt(start[1],2)} antes de usar el G-code.`:cordon.existing&&cordon.existing_length_mm>70?`Mantener cordón conserva los ${fmt(cordon.existing_length_mm,1)} mm originales. Añadir lo ajusta a 65 mm.`:'El cordón aparece separado en la simulación para identificar qué concreto retirar.';
+  $('cordon-warning').textContent=!cordon.can_add?cordon.reason:cordon.negative_xy?$('xy-boundary-offset-enabled').checked?'El punto propuesto cruza X=0 o Y=0. La conversión trasladará toda la trayectoria hasta dejar 20 mm de margen; revisa el desplazamiento y el alcance máximo en Auditoría.':`El punto propuesto tiene X o Y negativos. Comprueba que tu máquina alcance X ${fmt(start[0],2)}, Y ${fmt(start[1],2)} antes de usar el G-code.`:cordon.existing&&cordon.existing_length_mm>70?`Mantener cordón conserva los ${fmt(cordon.existing_length_mm,1)} mm originales. Añadir lo ajusta a 65 mm.`:'El cordón aparece separado en la simulación para identificar qué concreto retirar.';
   $('closure-details').innerHTML=review.review_required?`<div><small>CIERRE PENDIENTE · CAPA 1</small><strong>${fmt(review.missing_first_layer_length_mm)} mm</strong></div><div><small>CAPAS DE REFERENCIA</small><strong>${review.reference_layers.length}</strong></div><div class="seam">Inicio XY de origen: ${review.seam_xy.map(v=>fmt(v,2)).join(', ')} mm<br>${review.affected_layer_count} capas con el mismo contorno.</div>`:'';
   dialog.returnValue='';
   return new Promise(resolve=>{
@@ -162,6 +165,7 @@ async function chooseGcodeDestination(event){
   }
 }
 function setDownloads(){
+  document.dispatchEvent(new Event('xyzc:conversion-changed'));
   const id=state.result.id;
   for(const [element,path] of [['download-gcode','gcode'],['download-report','report'],['download-csv','samples']]){
     const el=$(element);
@@ -213,6 +217,8 @@ function renderAudit(){
   $('messages').querySelectorAll('[data-sample]').forEach(button=>button.onclick=()=>{page('simulacion');simulator.inspect(Number(button.dataset.sample))});
   renderOptimization(r);
   renderCordonAudit(r.cordon);
+  renderXYOffsetAudit(r.xy_boundary_offset);
+  renderInitialApproachAudit(r.initial_xy_approach);
   renderClosureAudit(r.layer_completion);
   drawChart();
 }
@@ -224,6 +230,27 @@ function renderCordonAudit(c){
   const coords=c.actual_start_xyz&&c.actual_end_xyz?` · X ${fmt(c.actual_start_xyz[0],2)}, Y ${fmt(c.actual_start_xyz[1],2)} → X ${fmt(c.actual_end_xyz[0],2)}, Y ${fmt(c.actual_end_xyz[1],2)}`:'';
   const check=c.validation?` · Verificación ${c.validation.status} · unión al inicio ${fmt(c.validation.seam_gap_mm,6)} mm`:'';
   panel.innerHTML=`<div class="message-box">${labels[c.status]||escapeHtml(c.status)}${c.actual_length_mm!=null?` · ${fmt(c.actual_length_mm,2)} mm`:''}${coords}${check}</div>`;
+}
+function renderXYOffsetAudit(offset){
+  const panel=$('xy-offset-report');
+  if(!offset){panel.className='hidden';return;}
+  panel.className='';
+  if(!offset.enabled){panel.innerHTML='<div class="message-box">Margen XY automático desactivado.</div>';return;}
+  if(!offset.output_bounds_xy_mm){panel.innerHTML='<div class="message-box">No hay recorrido XY para desplazar.</div>';return;}
+  const bounds=offset.output_bounds_xy_mm;
+  const action=offset.applied?`Desplazamiento aplicado a toda la trayectoria: X +${fmt(offset.shift_x_mm,3)} mm · Y +${fmt(offset.shift_y_mm,3)} mm.`:'No se necesitó desplazamiento XY.';
+  panel.innerHTML=`<div class="message-box">${action} Límites finales: X ${fmt(bounds.min_x,3)} a ${fmt(bounds.max_x,3)} mm · Y ${fmt(bounds.min_y,3)} a ${fmt(bounds.max_y,3)} mm. Verifica el alcance máximo de tu máquina.</div>`;
+}
+function renderInitialApproachAudit(approach){
+  const panel=$('initial-approach-report');
+  if(!approach||!approach.enabled){panel.className='hidden';return;}
+  panel.className='';
+  if(approach.status==='NO_DEPOSITION'){
+    panel.innerHTML='<div class="message-box">No se encontró un inicio de impresión para preparar la aproximación XY.</div>';
+    return;
+  }
+  const point=approach.selected_start_xyz;
+  panel.innerHTML=`<div class="message-box">Inicio XY: X ${fmt(point?.[0],3)}, Y ${fmt(point?.[1],3)} mm · ${approach.removed_motion_count} movimientos de aproximación originales sustituidos. Antes de ejecutar, coloca físicamente Z en ${fmt(approach.required_start_z_mm,3)} mm. El primer G0 solo mueve XY; la orientación C se realiza en el punto inicial.</div>`;
 }
 function renderClosureAudit(c){
   const panel=$('closure-report');
@@ -301,3 +328,14 @@ $('load-legacy').onclick=async()=>{
     drawSimulation();
   }catch(e){$('legacy-status').textContent=e.message;}finally{button.disabled=false;}
 };
+
+setupOptimization({
+  getRequest:()=>state.result&&state.result.status!=='FAIL'&&state.simulation?{source:state.simulation.raw_program,config:state.result.report.config}:null,
+  onSelected:async result=>{
+    const response=await fetch(`/api/simulate/${result.id}`);
+    if(!response.ok)throw Error(`HTTP ${response.status}`);
+    state.result=result;state.simulation=await response.json();state.legacySimulation=null;
+    setDownloads();renderAudit();fillSelectors();page('simulacion');
+    status('CANDIDATA VALIDADA');
+  }
+});

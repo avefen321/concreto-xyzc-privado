@@ -32,7 +32,7 @@ def _result(conversion_id: str) -> Result:
 
 @app.get("/")
 def index():
-    return FileResponse(ROOT / "frontend" / "index.html")
+    return FileResponse(ROOT / "frontend" / "index.html",headers={'Cache-Control':'no-cache'})
 
 
 @app.get('/api/config')
@@ -43,13 +43,19 @@ def default_config():
 @app.get("/css/{filename}")
 def css(filename: str):
     if filename not in ("app.css", "interactive.css"): raise HTTPException(404)
-    return FileResponse(ROOT / "frontend" / "css" / filename)
+    return FileResponse(ROOT / "frontend" / "css" / filename,headers={'Cache-Control':'no-cache'})
 
 
 @app.get("/js/{filename}")
 def js(filename: str):
-    if filename not in ("app.js", "simulation.js"): raise HTTPException(404)
-    return FileResponse(ROOT / "frontend" / "js" / filename, media_type="text/javascript")
+    if filename not in ("app.js", "simulation.js", "optimization.js", "deposition.js", "viewer3d.js"): raise HTTPException(404)
+    return FileResponse(ROOT / "frontend" / "js" / filename, media_type="text/javascript",headers={'Cache-Control':'no-cache'})
+
+
+@app.get('/vendor/three/{filename}')
+def three_vendor(filename: str):
+    if filename not in ('three.module.js','three.core.js','LICENSE','manifest.json'): raise HTTPException(404)
+    return FileResponse(ROOT/'frontend/vendor/three'/filename,media_type='text/javascript' if filename.endswith('.js') else 'text/plain',headers={'Cache-Control':'no-cache'})
 
 
 @app.get("/examples/cuadrado.ngc")
@@ -138,3 +144,77 @@ def gcode(conversion_id: str):
 def samples(conversion_id: str):
     return PlainTextResponse(_result(conversion_id).csv_text, media_type="text/csv",
                              headers={"Content-Disposition": 'attachment; filename="samples.csv"'})
+
+
+from .optimization.jobs import MANAGER as optimization_jobs, capabilities as optimization_capabilities, JobError, enabled as optimization_enabled
+
+
+def optimization_guard():
+    if not optimization_enabled(): raise HTTPException(503,'Optimización local desactivada')
+
+
+@app.get('/api/optimization/capabilities')
+def optimization_info():
+    return optimization_capabilities()
+
+
+@app.post('/api/optimization')
+def optimization_start(request: dict):
+    try: return optimization_jobs.start(request)
+    except JobError as error: raise HTTPException(error.status,str(error)) from error
+    except (ValueError,TypeError) as error: raise HTTPException(422,str(error)) from error
+
+
+@app.get('/api/optimization/{job_id}')
+def optimization_status(job_id: str):
+    optimization_guard()
+    try: return optimization_jobs.get(job_id).public()
+    except JobError as error: raise HTTPException(error.status,str(error)) from error
+
+
+@app.post('/api/optimization/{job_id}/cancel')
+def optimization_cancel(job_id: str):
+    optimization_guard()
+    try: return optimization_jobs.cancel(job_id)
+    except JobError as error: raise HTTPException(error.status,str(error)) from error
+
+
+@app.get('/api/optimization/{job_id}/result')
+def optimization_result(job_id: str):
+    optimization_guard()
+    try: job=optimization_jobs.get(job_id)
+    except JobError as error: raise HTTPException(error.status,str(error)) from error
+    if job.result is None: raise HTTPException(409,'Todavía no existe una candidata validada')
+    result=job.result; key=result.report['conversion_id']; _results[key]=result
+    while len(_results)>8: _results.pop(next(iter(_results)))
+    return {'id':key,'status':result.report['status'],'report':result.report,'sample_count':len(result.samples)}
+
+
+@app.get('/api/optimization/{job_id}/candidate/{candidate_id}/result')
+def optimization_candidate_result(job_id: str,candidate_id: str):
+    optimization_guard()
+    try: result=optimization_jobs.candidate_result(job_id,candidate_id)
+    except JobError as error: raise HTTPException(error.status,str(error)) from error
+    key=result.report['conversion_id'];_results[key]=result
+    while len(_results)>8:_results.pop(next(iter(_results)))
+    return {'id':key,'status':result.report['status'],'report':result.report,'sample_count':len(result.samples)}
+
+
+@app.get('/api/optimization/{job_id}/candidate/{candidate_id}/gcode')
+def optimization_candidate_gcode(job_id: str,candidate_id: str):
+    optimization_guard()
+    try:path,filename=optimization_jobs.candidate_file(job_id,candidate_id)
+    except JobError as error:raise HTTPException(error.status,str(error)) from error
+    return FileResponse(path,filename=filename,media_type='text/plain')
+
+
+@app.get('/api/optimization/{job_id}/artifact/{filename}')
+def optimization_artifact(job_id: str, filename: str):
+    optimization_guard()
+    if filename not in ('history.csv','search.json','selected.ngc','selected_report.json','selected_plan.json','job.json'):
+        raise HTTPException(404)
+    try: job=optimization_jobs.get(job_id)
+    except JobError as error: raise HTTPException(error.status,str(error)) from error
+    path=job.directory/filename
+    if not path.is_file(): raise HTTPException(409,'Archivo todavía no disponible')
+    return FileResponse(path,filename=filename)

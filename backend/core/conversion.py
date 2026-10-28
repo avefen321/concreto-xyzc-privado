@@ -11,6 +11,8 @@ from .layer_z import separate_layer_entries, normalize_layers
 from .layer_paths import alternate_open_layer_paths
 from .layer_completion import prepare_layer_closure, validate_completed_closure
 from .cordon import prepare_cordon, validate_cordon
+from .xy_boundary_offset import apply_xy_boundary_offset
+from .initial_xy_approach import prepare_initial_xy_approach
 from .sampling import CurveSampler
 from .diagnostics import density, primitive_density
 from .orientation import Field, nearest_equivalent_angle
@@ -392,6 +394,10 @@ def _serialize(blocks, motions: list[Motion], plan: FinalMotionPlan, config: Con
     add('(Concrete CNC XYZC '+BACKEND_VERSION+'; conversion_id='+conversion_id+')',reason='NORMALIZED_HEADER')
     add('G21',reason='NORMALIZED_UNITS'); add('G90',reason='NORMALIZED_COORDINATES')
     add('G17',reason='NORMALIZED_PLANE'); add('G91.1',reason='NORMALIZED_ARC_CENTERS'); add('G94',reason='NORMALIZED_FEED_MODE')
+    initial_xy = next((s for s in samples if s.generated_reason=='INITIAL_XY_APPROACH'),None)
+    if initial_xy is not None:
+        add(f'(INICIO SOLO XY: situar la maquina previamente en Z={initial_xy.Z:.3f} mm; no se ordena subida ni bajada Z inicial)',
+            reason='INITIAL_XY_Z_PRECONDITION')
     if config.linuxcnc.path_mode=='G64':
         add('G64'+(f' P{config.linuxcnc.blend_tolerance_mm:g}' if config.linuxcnc.blend_tolerance_mm is not None else ''),reason='CONFIGURED_PATH_MODE')
     if not geometry_only and any(block.value('E') is not None for block in blocks): add('M82',reason='NORMALIZED_EXTRUSION')
@@ -408,7 +414,9 @@ def _serialize(blocks, motions: list[Motion], plan: FinalMotionPlan, config: Con
         if initial_alignment:
             add('G61.1', source_line=sample.source_line, reason='INITIAL_C_EXACT_STOP')
         command='G0' if sample.motion_type in ('RAPID','PREP_RAPID') else 'G1'
-        if sample.motion_type=='C_ONLY':
+        if sample.generated_reason=='INITIAL_XY_APPROACH':
+            text=f'G0 X{coordinate(sample.X)} Y{coordinate(sample.Y)} C{angle(sample.C_deg)}'
+        elif sample.motion_type=='C_ONLY':
             text=f'G1 C{angle(sample.C_deg)}'
             if initial_alignment and sample.feed_mm_min is not None:
                 text+=' F'+feed(sample.feed_mm_min)
@@ -515,12 +523,15 @@ def _csv(samples):
     return output.getvalue()
 
 
-def convert(source: str, config: Config | None = None) -> Result:
+def convert(source: str, config: Config | None = None, *, representation=None) -> Result:
     config = config or Config()
     config.validate()
     trace_stages = StageTrace()
     input_hash, config_hash = digest(source), digest(config.to_dict())
     conversion_id = digest([input_hash,config_hash,BACKEND_VERSION])
+    if representation is not None:
+        representation.verify(source,config)
+        conversion_id=digest([conversion_id,representation.identity])
     trace_stages.add(source,len(source.splitlines()))
     blocks = parse(source)
     parsed_program=[asdict(b) for b in blocks]
@@ -538,6 +549,8 @@ def convert(source: str, config: Config | None = None) -> Result:
     motions, closure_report, closure_warnings = prepare_layer_closure(motions, blocks, config)
     warnings.extend(closure_warnings)
     motions, cordon_report = prepare_cordon(motions, blocks, config, closure_report)
+    motions, initial_approach_report = prepare_initial_xy_approach(motions, config)
+    motions, xy_offset_report = apply_xy_boundary_offset(motions, cordon_report, config)
     if config.sampling.mode=='legacy':
         motions = linearize_arcs(motions,min(1.,config.sampling.max_linear_step_mm),
                                  min(2.,config.sampling.max_delta_c_deg),min(.03,config.corner_smoothing.max_chord_error_mm))
@@ -553,6 +566,9 @@ def convert(source: str, config: Config | None = None) -> Result:
         strokes,layers,motions,config)
     warnings.extend(transition_warnings)
     z_report=normalize_layers(strokes,layers,motions,config)
+    if initial_approach_report['status']=='XY_ONLY_REQUIRES_PREPOSITIONED_Z' and layers:
+        initial_approach_report['required_start_z_mm']=layers[0].nominal_z
+        warnings.append(f"INITIAL_XY_APPROACH: ubique físicamente Z={layers[0].nominal_z:g} mm antes de ejecutar; la aproximación inicial solo mueve XY.")
     strokes=[compress_collinear(s,config) for s in strokes]
     canonical_program=[{'canonical_motion_id':i,'source_motion_id':m.source_motion_id,'source_line':m.line,
                         'start_xyz':list(m.start),'end_xyz':list(m.end),'kind':m.kind,'feed_source':m.feed,
@@ -616,7 +632,12 @@ def convert(source: str, config: Config | None = None) -> Result:
         # stroke reference for fitting; apply the fixed-axis C0 only when the
         # final machine field is built below.
         fit_previous_c=(None if fixed_axis_start and not fields else previous_c)
-        optimized,fit_decisions=fit_stroke(optimized,config,fit_previous_c)
+        if config.arc_fit.reference_model=='PARAMETRIC_HERMITE':
+            # Reconstruction is geometric. A machine's accumulated C branch
+            # must not change its partitions/fallbacks on repeated layers.
+            # The final Field below still unwraps C against previous_c.
+            fit_previous_c=None
+        optimized,fit_decisions=fit_stroke(optimized,config,fit_previous_c,representation)
         arc_fit_decisions.extend(fit_decisions)
         if stroke.deposition:
             safe_seams.append(seam_report)
@@ -639,12 +660,15 @@ def convert(source: str, config: Config | None = None) -> Result:
                       home_reference=(first_print_stroke and previous_c is None and
                                       initial_orientation_mode == 'HOME_ALIGNED_TANGENT'),
                       reference_shift_deg=c_reference_shift)
+        if representation is not None:
+            representation.align_field(stroke.id,field)
         c_reference_shift=field.reference_shift_deg
         planned_feeds, recommendations = plan_field(field,config)
         feed_rows.extend(recommendations)
         fields[stroke.id] = field
         if field.point_c:
-            previous_c = field.point_c[-1]
+            previous_c = (representation.end_c(stroke.id,field.point_c[-1])
+                          if representation is not None else field.point_c[-1])
         last_print_motion_index=int(stroke.points[-1].motion_index)+1
         if len(field.corners) and any(c.status == 'FAIL' for c in field.corners):
             warnings.append(f"Stroke {stroke.id}: EXACT_VERTEX requiere permitir C-only")
@@ -693,7 +717,13 @@ def convert(source: str, config: Config | None = None) -> Result:
         orient_stroke_start=(native_enabled(config) and abs((incoming_c or 0.)-field.point_c[0])>config.precision.angle_epsilon_deg)
         if needs_initial_alignment:
             orient_stroke_start=False
+        already_approached=(first_print_stroke and any(
+            motion.kind == 'RAPID' and
+            xy_length(motion.end, start.xyz) <= config.geometry.zero_length_tolerance_mm
+            for motion in motions[:int(stroke.points[0].motion_index)]))
         if (xy_length(stroke.points[0].xyz, start.xyz) > config.geometry.zero_length_tolerance_mm or orient_after_cordon or orient_stroke_start or
+                (first_print_stroke and config.initial_xy_approach.enabled) or
+                (first_print_stroke and xy_offset_report['applied'] and not already_approached) or
                 (len(fields)==1 and stroke.layer_id==1 and config.z_conversion.enabled and
                  abs(z_report['source_layer_z_values'][0]-start.xyz[2])>config.z_conversion.z_match_tolerance_mm)):
             if orient_after_cordon:
@@ -704,6 +734,9 @@ def convert(source: str, config: Config | None = None) -> Result:
                                   start.motion_index - 0.5, None, -1, s_global, 0, *start.xyz,
                                   None, None, prep_c, 0, 0, start.feed, None, None,
                                   False, None, 'PREP_RAPID', False))
+            if first_print_stroke and config.initial_xy_approach.enabled:
+                samples[-1].generated_reason='INITIAL_XY_APPROACH'
+                initial_approach_report['selected_start_xyz']=list(start.xyz)
             if orient_after_cordon: samples[-1].generated_reason='CORDON_ORIENTATION'
         if (needs_initial_alignment and
                 abs(initial_alignment_target_c-initial_alignment_start_c) > config.precision.angle_epsilon_deg):
@@ -1059,6 +1092,8 @@ def convert(source: str, config: Config | None = None) -> Result:
               "layer_completion":closure_report,
               "open_path_transitions":open_transition_report,
               "cordon":cordon_report,
+              "initial_xy_approach":initial_approach_report,
+              "xy_boundary_offset":xy_offset_report,
               "linuxcnc":{'policy':config.linuxcnc.path_mode,'source_modes':path_modes,'machine_mode_verified':False},
               "safe_seams":safe_seams,"simplification":simplification_report,
               "initial_c_reference":initial_reference,

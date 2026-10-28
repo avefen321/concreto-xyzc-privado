@@ -494,13 +494,13 @@ def machine_block_cost(field,config):
                else len(values) for i,values in rows.items())
 
 
-def fit_stroke(stroke,config,previous_c=None):
+def fit_stroke(stroke,config,previous_c=None,representation=None):
     if (not stroke.deposition or not config.native_arcs.enabled or not config.arc_fit.enabled or not config.native_arcs.fitted_free_curves.enabled or
             config.serialization.motion_mode=='G1_ONLY' or config.sampling.mode=='legacy' or len(stroke.points)<3):
         return stroke,[]
     if config.arc_fit.reference_model=='PARAMETRIC_HERMITE' and config.geometry.mode!='PRESERVE_PATH':
         from .curve_reconstruction import reconstruct_stroke
-        return reconstruct_stroke(stroke,config,previous_c)
+        return reconstruct_stroke(stroke,config,previous_c,representation)
     reference=Field(stroke,config,previous_c); fitter=ArcFitter(reference,config)
     pts=stroke.points; boundaries={0:None,len(pts)-1:None}
     for i,p in enumerate(pts):

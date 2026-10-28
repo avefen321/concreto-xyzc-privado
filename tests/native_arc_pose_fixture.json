@@ -1,0 +1,129 @@
+{
+  "primitive": {
+    "id": "P4",
+    "source_id": 2,
+    "layer_id": 1,
+    "stroke_id": 2,
+    "type": "ARC",
+    "start_xyz": [
+      265.0,
+      0.0,
+      20.0
+    ],
+    "end_xyz": [
+      300.0,
+      34.99999999999999,
+      20.0
+    ],
+    "start_c": 90.0,
+    "end_c": 180.0,
+    "feed": 2400.0,
+    "process_state": "DEPOSIT",
+    "source_line": 4,
+    "sample_id": 10,
+    "anchor_line": null,
+    "motion_type": "LINEAR",
+    "generated_reason": "FILLET",
+    "E": null,
+    "metadata": {
+      "source_lines": [
+        4
+      ],
+      "fillet_id": 1,
+      "c_reference_shift_deg": -0.0
+    },
+    "plane": "G17",
+    "center_xyz": [
+      265.0,
+      35.0,
+      20.0
+    ],
+    "radius": 35.0,
+    "sweep_rad": 1.5707963267948966,
+    "direction": "CCW",
+    "start_angle_rad": -1.5707963267948966,
+    "arc_source": "CORNER_FILLET",
+    "length_mm": 54.97787143782138,
+    "duration_s": 1.3744467859455345,
+    "required_c_velocity_deg_s": 65.48089087209408,
+    "end_angle_rad": 0.0,
+    "sweep_deg": 90.0,
+    "tangent_start_xy": [
+      1.0,
+      0.0
+    ],
+    "tangent_end_xy": [
+      6.123233995736766e-17,
+      1.0
+    ],
+    "I": 0.0,
+    "J": 35.0
+  },
+  "expected": [
+    {
+      "t": 0.0,
+      "pose": [
+        265.0,
+        0.0,
+        20.0,
+        90.0
+      ],
+      "tangent_xy": [
+        1.0,
+        0.0
+      ]
+    },
+    {
+      "t": 0.25,
+      "pose": [
+        278.39392013277813,
+        2.664216362104966,
+        20.0,
+        112.5
+      ],
+      "tangent_xy": [
+        0.9238795325112867,
+        0.3826834323650898
+      ]
+    },
+    {
+      "t": 0.5,
+      "pose": [
+        289.74873734152914,
+        10.251262658470836,
+        20.0,
+        135.0
+      ],
+      "tangent_xy": [
+        0.7071067811865476,
+        0.7071067811865476
+      ]
+    },
+    {
+      "t": 0.75,
+      "pose": [
+        297.335783637895,
+        21.606079867221858,
+        20.0,
+        157.5
+      ],
+      "tangent_xy": [
+        0.38268343236508984,
+        0.9238795325112867
+      ]
+    },
+    {
+      "t": 1.0,
+      "pose": [
+        300.0,
+        34.99999999999999,
+        20.0,
+        180.0
+      ],
+      "tangent_xy": [
+        6.123233995736766e-17,
+        1.0
+      ]
+    }
+  ]
+}

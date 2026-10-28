@@ -23,9 +23,10 @@ export function buildPlaybackTrack(samples, startIndex = 0, include = () => true
     const primitive = bySample.get(sample.sample_id);
     const from = primitive ? {...sample, X:primitive.start_xyz[0], Y:primitive.start_xyz[1],
       Z:primitive.start_xyz[2], C_deg:primitive.start_c} : reference ? sample : previous || sample;
+    if(primitive?.generated_reason==='INITIAL_XY_APPROACH')from.Z=primitive.end_xyz[2];
     if (index >= startIndex && include(sample)) {
       // START is a position reference, not a commanded move to interpolate.
-      const distance = primitive?.length_mm ?? Math.hypot(sample.X - from.X, sample.Y - from.Y, sample.Z - from.Z);
+      const distance = primitive?.generated_reason==='INITIAL_XY_APPROACH'?Math.hypot(sample.X-from.X,sample.Y-from.Y):primitive?.length_mm ?? Math.hypot(sample.X - from.X, sample.Y - from.Y, sample.Z - from.Z);
       const rotation = Math.abs(sample.C_deg - from.C_deg);
       const rapid = ['RAPID', 'PREP_RAPID'].includes(sample.motion_type);
       const moving = !reference && (distance > 1e-9 || rotation > 1e-9);
@@ -73,6 +74,9 @@ export function playbackAtCursor(track, cursor) {
 // fillet or unwrap algorithm is reconstructed in the viewer.
 export function primitivePose(p,t) {
   const xyz=p.start_xyz.map((a,i)=>a+(p.end_xyz[i]-a)*t);
+  // The XY-only startup explicitly requires the operator to preposition Z.
+  // Its unknown machine origin must not appear as a fictitious initial lift.
+  if(p.generated_reason==='INITIAL_XY_APPROACH')xyz[2]=p.end_xyz[2];
   if(p.type==='ARC' && t>0 && t<1){
     const angle=p.start_angle_rad+p.sweep_rad*t;
     xyz[0]=p.center_xyz[0]+p.radius*Math.cos(angle);
@@ -112,6 +116,14 @@ export function createSimulator(state, fmt) {
   let playback = {entries: [], totalSeconds: 0, estimatedCount: 0};
   let playbackCursor = 0;
   let lastFrameTime = null;
+  let concrete3D=null,concreteLoading=null,concreteError=null;
+
+  function ensureConcrete3D() {
+    if(concrete3D||concreteLoading||concreteError)return;
+    concreteLoading=import('./viewer3d.js?v=2.2').then(module=>{
+      concrete3D=module.createConcreteViewer($('sim-canvas').parentElement);draw(state.simulation);
+    }).catch(error=>{concreteError=error.message;draw(state.simulation);});
+  }
 
   function pausePlayback() {
     state.playing = false;
@@ -124,6 +136,8 @@ export function createSimulator(state, fmt) {
 
   function refreshPlayback() {
     pausePlayback();
+    // A smaller layer/stroke selection can recover from the geometry budget.
+    if(concreteError){concreteError=null;concreteLoading=null;}
     const sim = state.simulation;
     if (!sim) {playback = {entries: [], totalSeconds: 0, estimatedCount: 0}; return;}
     const layer = $('layer-select').value, stroke = $('stroke-select').value;
@@ -183,13 +197,29 @@ export function createSimulator(state, fmt) {
     state.view = view;
     $('view-2d').classList.toggle('selected', view === '2d');
     $('view-3d').classList.toggle('selected', view === '3d');
-    $('camera-controls').classList.toggle('hidden', view !== '3d');
-    $('sim-canvas').parentElement.classList.toggle('canvas-3d', view === '3d');
+    $('view-material').classList.toggle('selected', view === 'material');
+    $('view-2d').setAttribute('aria-pressed',String(view === '2d'));
+    $('view-3d').setAttribute('aria-pressed',String(view === '3d'));
+    $('view-material').setAttribute('aria-pressed',String(view === 'material'));
+    $('view-mode-description').textContent=view==='2d'
+      ?'Plano XY: trayectorias, puntos, esquinas, fillets y diagnóstico T1/T2/centro vistos desde arriba.'
+      :view==='3d'
+        ?'3D clásica: líneas, puntos, fillets y T1/T2 con cámara orbital, sin volumen de concreto.'
+        :'Concreto 3D: volumen nominal depositado, capas, viajes, subidas Z, boquilla y ejes XYZ.';
+    $('camera-controls').classList.toggle('hidden', view === '2d');
+    $('deposition-controls').classList.toggle('hidden', view !== 'material');
+    $('deposition-status').classList.toggle('hidden', view !== 'material');
+    $('sim-canvas').parentElement.classList.toggle('canvas-3d', view !== '2d');
+    $('page-simulacion').classList.toggle('material-view',view==='material');
+    const legend=$('sim-canvas').parentElement.querySelector('.canvas-legend');
+    if(legend)legend.innerHTML=view==='material'?'<span><i class="swatch material-swatch"></i> Concreto nominal</span><span><i class="swatch travel-swatch"></i> Viajes / subidas</span><span><i class="swatch cordon-swatch"></i> Cordón inicial</span><span><i class="swatch nozzle-swatch"></i> Boquilla</span>':'<span><i class="swatch original"></i> Original</span><span><i class="swatch converted"></i> Optimizada</span><span><i class="swatch corner"></i> Fillet</span><span><i class="swatch cordon-swatch"></i> Cordón</span>';
     draw(state.simulation);
   }
 
   function fillSelectors(simulation) {
     if (!simulation) return;
+    const selected=simulation.audit?.optimization_selection;
+    $('sim-plan-identity').textContent=selected?`Mostrando: ${selected.label} · ${selected.method.toUpperCase()} · ${selected.N_blocks} bloques · ${selected.recommended?'mejor candidata válida':'candidata elegida para consulta'}. Las descargas XYZC corresponden a este plan.`:'Mostrando: conversión original, antes de seleccionar una candidata de IA.';
     const strokes = simulation.original_strokes;
     const layers = [...new Set(strokes.map(s => s.layer_id).filter(id => id != null))];
     $('layer-select').innerHTML = '<option value="all">Todas</option>' +
@@ -313,6 +343,27 @@ export function createSimulator(state, fmt) {
   }
 
   function draw(sim) {
+    if(state.view==='material'&&sim){
+      ensureConcrete3D();
+      const head=playbackAtCursor(playback,$('play-mode').value==='continuous'?playbackCursor:Math.floor(playbackCursor));
+      if(concrete3D){
+        try {
+          const layer=$('layer-select').value,stroke=$('stroke-select').value;
+          const include=item=>(layer==='all'||String(item.layer_id)===layer)&&(stroke==='all'||String(item.stroke_id)===stroke);
+          const result=concrete3D.draw({sim,track:playback,head,include,key:layer+':'+stroke,view:camera,
+            options:{material:$('show-deposition').checked,paths:$('show-future-path').checked,
+              travels:$('show-travels-3d').checked,axes:$('show-axes-3d').checked,nozzle:$('show-nozzle').checked,compare:$('path-compare').value}});
+          const p=head?.entry.primitive;
+          const rising=p&&p.type!=='ARC'&&Math.abs(p.end_xyz[2]-p.start_xyz[2])>1e-8&&Math.hypot(p.end_xyz[0]-p.start_xyz[0],p.end_xyz[1]-p.start_xyz[1])<1e-8;
+          $('deposition-status').textContent=(rising?`Subida entre capas: Z ${fmt(p.start_xyz[2])} → ${fmt(p.end_xyz[2])} mm · sin depósito. `:head?`Capa ${head.entry.sample.layer_id??'—'} · Z ${fmt(head.pose.Z)} mm. `:'')+
+            (result.heightSource==='PROGRAM_Z'?`Volumen nominal: espesores según las diferencias Z del programa; primera capa ${fmt(result.firstHeight)} mm. `:`Volumen nominal: primera capa ${fmt(result.firstHeight)} mm; siguientes ${fmt(result.nextHeight)} mm. `)+
+            'Z es la cara superior del cordón. Gris: concreto; azul discontinuo: viajes. Pulsa Reproducir para depositar. No modela flujo ni deformación.';
+          hitTargets=[];updatePlaybackDetails(sim,head);return;
+        }catch(error){concreteError=error.message;concrete3D.dispose();concrete3D=null;}
+      }
+      $('deposition-status').textContent=concreteError?`Volumen WebGL no disponible: ${concreteError}. Se conserva el visor de trayectorias.`:'Preparando el volumen 3D…';
+    }
+    concrete3D?.hide();
     const canvas = $('sim-canvas');
     const {ctx, w, h} = resize(canvas);
     ctx.fillStyle = '#171c1f'; ctx.fillRect(0, 0, w, h);
@@ -403,15 +454,24 @@ export function createSimulator(state, fmt) {
     if($('show-corners').checked)for(const f of sim.fillets.filter(include)){const sample=sim.samples.find(s=>s.sample_id===f.sample_id);if(sample&&f.vertex_xyz)hitTargets.push({sample,xy:project(f.vertex_xyz)});}
     const continuous = $('play-mode').value === 'continuous';
     const head = playbackAtCursor(playback, continuous ? playbackCursor : Math.floor(playbackCursor));
-    const current = head?.entry.sample;
+    const current=head?.entry.sample;
+    if(current){
+      if (compare !== 'original' && head.entry.duration > 0)
+        drawPath(ctx, head.entry.primitive ? primitivePoints(head.entry.primitive,head.fraction) : [[head.entry.from.X,head.entry.from.Y,head.entry.from.Z], [head.pose.X,head.pose.Y,head.pose.Z]], project, '#8ce0c0', 4, !current.deposition_active);
+      if (include(current)) nozzle(ctx, project, head.pose, sim.audit?.config?.nozzle);
+    }
+    updatePlaybackDetails(sim,head);
+  }
+
+  function updatePlaybackDetails(sim,head) {
+    const current=head?.entry.sample,continuous=$('play-mode').value==='continuous';
+    const stage=$('debug-stage').value,layer=$('layer-select').value,stroke=$('stroke-select').value;
+    const include=item=>(layer==='all'||String(item.layer_id)===layer)&&(stroke==='all'||String(item.stroke_id)===stroke);
     $('timeline-label').textContent = head ? `${head.entryIndex + 1} / ${playback.entries.length} · ${fmt(head.seconds,1)} / ${fmt(playback.totalSeconds,1)} s` : 'Sin recorrido en esta selección';
     $('playback-hint').textContent = continuous
       ? `Continua: tiempo ideal por longitud y F; no incluye aceleración ni blending de la máquina. ${playback.estimatedCount ? `${playback.estimatedCount} movimientos G0, C-only o sin F usan un tiempo visual estimado. ` : ''}Velocidad visual ${$('play-speed').selectedOptions[0].textContent}.`
       : 'Por bloques: muestra los puntos del G-code uno a uno (2 bloques/s a 1×). El tiempo de pantalla en este modo no representa el tiempo de la impresora.';
     if (current) {
-      if (compare !== 'original' && head.entry.duration > 0)
-        drawPath(ctx, head.entry.primitive ? primitivePoints(head.entry.primitive,head.fraction) : [[head.entry.from.X,head.entry.from.Y,head.entry.from.Z], [head.pose.X,head.pose.Y,head.pose.Z]], project, '#8ce0c0', 4, !current.deposition_active);
-      if (include(current)) nozzle(ctx, project, head.pose, sim.audit?.config?.nozzle);
       $('sample-id').value=current.sample_id;
       const f=sim.fillets.find(f=>f.stroke_id===current.stroke_id&&f.id===current.fillet_id);
       $('corner-detail').textContent=f?`Corner #${f.id} · Capa ${f.layer_id} · Giro ${fmt(f.turn_angle_deg)}° · R elegido ${fmt(f.radius_mm)} mm / preferido ${fmt(f.radius_preferred_mm)} / máximo ${fmt(f.radius_max_feasible_mm)}
@@ -459,12 +519,16 @@ Máquina: ${f.machine_block_count??f.sample_count} bloques · Pantalla: ${f.disp
   $('path-compare').onchange = () => draw(state.simulation);
   $('view-2d').onclick = () => setView('2d');
   $('view-3d').onclick = () => setView('3d');
+  $('view-material').onclick = () => setView('material');
   $('camera-reset').onclick = () => resetCamera('iso');
   $('camera-top').onclick = () => resetCamera('top');
   $('camera-front').onclick = () => resetCamera('front');
   $('camera-side').onclick = () => resetCamera('side');
   $('camera-iso').onclick = () => resetCamera('iso');
   $('camera-fit').onclick = fitCamera;
+  $('show-complete-print').onclick=()=>{pausePlayback();playbackCursor=Math.max(0,playback.entries.length-1);$('timeline').value=playbackCursor;draw(state.simulation);};
+  $('restart-print').onclick=()=>refreshPlayback();
+  for(const id of ['show-deposition','show-future-path','show-travels-3d','show-axes-3d'])$(id).onchange=()=>draw(state.simulation);
   $('camera-pan').onclick = () => {
     interactionMode = interactionMode === 'orbit' ? 'pan' : 'orbit';
     $('camera-pan').setAttribute('aria-pressed', String(interactionMode === 'pan'));
@@ -502,14 +566,14 @@ Máquina: ${f.machine_block_count??f.sample_count} bloques · Pantalla: ${f.disp
   const canvas = $('sim-canvas');
   canvas.addEventListener('contextmenu', event => event.preventDefault());
   canvas.addEventListener('pointerdown', event => {
-    if (state.view !== '3d') return;
+    if (state.view === '2d') return;
     event.preventDefault();
     drag = {x: event.clientX, y: event.clientY, startX:event.clientX,startY:event.clientY,
             mode: interactionMode === 'pan' || event.button === 2 || event.button === 1 || event.shiftKey ? 'pan' : 'orbit'};
     canvas.setPointerCapture(event.pointerId);
   });
   canvas.addEventListener('pointermove', event => {
-    if (!drag || state.view !== '3d') return;
+    if (!drag || state.view === '2d') return;
     const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
     if (drag.mode === 'pan') {camera.panX += dx; camera.panY += dy;}
     else {
@@ -522,6 +586,10 @@ Máquina: ${f.machine_block_count??f.sample_count} bloques · Pantalla: ${f.disp
   });
   canvas.addEventListener('pointerup',event=>{
     if(!drag || Math.hypot(event.clientX-drag.startX,event.clientY-drag.startY)<4){
+      if(state.view==='material'&&concrete3D){
+        const box=canvas.getBoundingClientRect(),id=concrete3D.pick(event.clientX-box.left,event.clientY-box.top);
+        if(id)inspect(id);drag=null;return;
+      }
       const box=canvas.getBoundingClientRect();let best=null,distance=14;
       for(const hit of hitTargets){const d=Math.hypot(hit.xy[0]-(event.clientX-box.left),hit.xy[1]-(event.clientY-box.top));if(d<distance){best=hit;distance=d;}}
       if(best)inspect(best.sample.sample_id);
@@ -530,7 +598,7 @@ Máquina: ${f.machine_block_count??f.sample_count} bloques · Pantalla: ${f.disp
   });
   canvas.addEventListener('pointercancel',()=>{drag=null;});
   canvas.addEventListener('wheel', event => {
-    if (state.view !== '3d') return;
+    if (state.view === '2d') return;
     event.preventDefault();
     camera.zoom = Math.max(.1, Math.min(20, camera.zoom * Math.exp(-event.deltaY * .001)));
     draw(state.simulation);
